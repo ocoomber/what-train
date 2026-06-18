@@ -14,10 +14,15 @@ The app fires GPS on open and helps you pick your train, then tracks it:
    cards; tap the train you're on. If you're moving fast with a clear direction,
    it leads with a best-guess *"Are you on this train?"* card (**YES** / **NOT
    THIS ONE**), with the full list always one tap away.
-2. **Tracking your train** — once you tap a train it locks onto that exact
-   service and shows the next stop, the stop after, and the final destination
-   with live ETAs and delay status, auto-refreshing every 60 seconds. It stays
-   on that train until you tap **Show me a different train**.
+2. **Tracking your train** — once you tap a train (or it auto-picks the only
+   plausible one when you're moving), it locks onto that exact service and shows
+   where the train is now plus **every remaining stop to the destination** with
+   live ETAs, platforms, and delay status — auto-refreshing every 60 seconds. It
+   stays on that train until you tap **Different train**.
+
+The locked train also has a shareable deep link (`?train=<serviceId>`): the URL
+becomes a direct pointer to that exact service, so it can be bookmarked, shared,
+or turned into a QR code — the same idea as the QR codes found on some trains.
 
 ## Architecture
 

@@ -29,6 +29,7 @@ let current = State.ACQUIRING;
 let stations = [];           // [{c,n,y,x}]
 let crsIndex = new Map();    // CRS -> {y,x}
 let lastFix = null;
+let fixHistory = [];         // recent fixes for smoothing speed/bearing
 let speedMph = 0;
 let bearing = null;
 
@@ -158,18 +159,23 @@ async function api(path) {
 function onPosition(pos) {
   const c = pos.coords;
   const fix = { y: c.latitude, x: c.longitude, t: pos.timestamp };
+  fixHistory.push(fix);
+  fixHistory = fixHistory.filter((f) => f.t >= fix.t - 30000).slice(-6);
 
+  // Speed: device value if present, else averaged over the recent window.
   let mps = (typeof c.speed === "number" && c.speed >= 0) ? c.speed : null;
-  if (mps == null && lastFix) {
-    const dt = (fix.t - lastFix.t) / 1000;
-    if (dt > 0) mps = distanceM(lastFix, fix) / dt;
+  if (mps == null && fixHistory.length >= 2) {
+    const a = fixHistory[0], dt = (fix.t - a.t) / 1000;
+    if (dt > 0) mps = distanceM(a, fix) / dt;
   }
   if (mps != null) speedMph = mps * 2.23694;
 
+  // Bearing: device heading when moving, else net travel across the window
+  // (more stable than two consecutive fixes).
   if (typeof c.heading === "number" && !isNaN(c.heading) && speedMph > STOPPED_MPH) {
     bearing = c.heading;
-  } else if (lastFix && distanceM(lastFix, fix) > 8) {
-    bearing = bearingDeg(lastFix, fix);
+  } else if (fixHistory.length >= 2 && distanceM(fixHistory[0], fix) > 20) {
+    bearing = bearingDeg(fixHistory[0], fix);
   }
 
   lastFix = fix;
@@ -296,6 +302,14 @@ async function enterMoving() {
     const services = data.services || [];
     discovery = { stationCrs: ahead.station.c, services };
     candidates = rankByDirection(services, ahead.station);
+
+    // Auto-lock when there's exactly one plausible train (the most QR-like feel).
+    if (candidates.length === 1) {
+      const s = candidates[0];
+      const uid = s.scheduleMetadata && s.scheduleMetadata.uniqueIdentity;
+      const op = s.scheduleMetadata && s.scheduleMetadata.operator && s.scheduleMetadata.operator.name;
+      if (uid) { lockOnto(uid, op, true); return; }
+    }
     if (candidates.length) { candidateIdx = 0; renderGuess(); }
     else renderFallbackList(ahead.station, services);
   } catch (e) {
@@ -365,14 +379,32 @@ function renderFallbackList(station, services) {
 }
 
 // ---------- STATE 3: confirmed ----------
-function lockOnto(uid, op) {
+function lockOnto(uid, op, auto) {
   if (!uid) return;
-  locked = { uid, op: op || "" };
-  sessionStorage.setItem("mytrain.locked", JSON.stringify(locked));
+  locked = { uid, op: op || "", auto: !!auto };
+  try { sessionStorage.setItem("mytrain.locked", JSON.stringify(locked)); } catch (_) {}
+  // Make the URL a deep link to this exact train (shareable / bookmarkable / QR-able).
+  try {
+    if (typeof history !== "undefined" && history.replaceState) {
+      history.replaceState(null, "", location.pathname + "?train=" + encodeURIComponent(uid));
+    }
+  } catch (_) {}
   current = State.CONFIRMED;
   setStatus("TRAIN LOCKED", "ok");
   loadService();
   startAutoRefresh();
+}
+
+function shareTrain() {
+  if (!locked) return;
+  let url;
+  try { url = location.origin + location.pathname + "?train=" + encodeURIComponent(locked.uid); } catch (_) { return; }
+  if (navigator.share) { navigator.share({ title: "My Train", text: "Live train tracker", url }).catch(() => {}); return; }
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(url).then(() => setStatus("LINK COPIED", "ok"), () => window.prompt("Copy this link", url));
+    return;
+  }
+  window.prompt("Copy this link", url);
 }
 function startAutoRefresh() {
   clearInterval(refreshTimer);
@@ -406,15 +438,11 @@ function renderTrain(svc) {
   const finalIdx = stops.length - 1;
   const final = stops[finalIdx];
   const arrived = final.temporalData && final.temporalData.arrival && final.temporalData.arrival.realtimeActual;
+  const nextIdx = arrived ? finalIdx : Math.min(lastDeparted + 1, finalIdx);
+  const next = stops[nextIdx];
 
-  const nextIdx = arrived ? -1 : Math.min(lastDeparted + 1, finalIdx);
-  const next = nextIdx >= 0 ? stops[nextIdx] : null;
-  const after = next && nextIdx + 1 <= finalIdx && nextIdx + 1 !== finalIdx ? stops[nextIdx + 1] : null;
-
-  const probe = next || final;
-  const probeTd = (probe.temporalData && (probe.temporalData.arrival || probe.temporalData.departure)) || null;
+  const probeTd = (next.temporalData && (next.temporalData.arrival || next.temporalData.departure)) || null;
   const delayMin = latenessMin(probeTd);
-
   const reasons = svc.reasons && svc.reasons[0];
   const reason = reasons ? (reasons.longText || reasons.shortText || "") : "";
 
@@ -422,10 +450,25 @@ function renderTrain(svc) {
   const finalName = locName(final);
   const headcode = (svc.scheduleMetadata && (svc.scheduleMetadata.trainReportingIdentity || svc.scheduleMetadata.identity)) || "";
 
+  // Where the train is right now.
+  let posLine;
+  if (arrived) {
+    posLine = `Arrived at ${esc(finalName)}`;
+  } else if (lastDeparted < 0) {
+    posLine = `At ${esc(locName(stops[0]))} · departs ${fmtClock(bestTime(stops[0].temporalData && stops[0].temporalData.departure))}`;
+  } else {
+    const st = next.temporalData && next.temporalData.status;
+    posLine = (st === "AT_PLATFORM" || st === "ARRIVING")
+      ? `At ${esc(locName(next))}`
+      : `Left ${esc(locName(stops[lastDeparted]))} · heading to ${esc(locName(next))}`;
+  }
+
   let html = `<div class="train-head">
       <div class="op">${esc(op)}</div>
       <div class="final">to ${esc(finalName)}${headcode ? `<br>${esc(headcode)}` : ""}</div>
     </div>`;
+
+  if (locked.auto) html += `<div class="auto-note">Auto-picked your most likely train — wrong one? Use the button below.</div>`;
 
   if (arrived) {
     html += `<div class="delay-banner delay-ok">ARRIVED AT ${esc(finalName).toUpperCase()}</div>`;
@@ -435,19 +478,30 @@ function renderTrain(svc) {
     html += `<div class="delay-banner delay-ok">ON TIME${reason ? `<div class="delay-reason">${esc(reason)}</div>` : ""}</div>`;
   }
 
-  if (!arrived && next) {
-    html += stopBlock("NEXT STOP", next);
-    if (after) html += stopBlock("THEN", after);
-    if (final !== next && final !== after) html += stopBlock("FINAL DESTINATION", final, true);
+  html += `<div class="train-status">${posLine}</div>`;
+
+  if (!arrived) {
+    if (nextIdx === finalIdx) {
+      html += stopBlock("FINAL DESTINATION", final, true);
+    } else {
+      html += stopBlock("NEXT STOP", next);
+      html += `<div class="screen-title" style="margin-top:6px">Then calling at</div>`;
+      for (let i = nextIdx + 1; i <= finalIdx; i++) html += stopRow(stops[i], i === finalIdx);
+    }
   }
 
   html += `<button class="btn btn-wide refresh-btn" id="refresh-now">↻ REFRESH</button>`;
   html += `<div class="updated-note">Updated ${fmtClock(new Date())} · auto-refresh 60s</div>`;
-  html += `<button class="btn btn-wide" id="forget" style="margin-top:10px">SHOW ME A DIFFERENT TRAIN</button>`;
+  html += `<div class="btn-row" style="margin-top:8px">
+      <button class="btn" id="share">🔗 SHARE</button>
+      <button class="btn" id="forget">DIFFERENT TRAIN</button>
+    </div>`;
 
   $screen.innerHTML = html;
   document.getElementById("refresh-now").onclick = () => loadService(false);
   document.getElementById("forget").onclick = forgetTrain;
+  const sh = document.getElementById("share");
+  if (sh) sh.onclick = shareTrain;
 }
 
 function locName(stop) {
@@ -472,10 +526,27 @@ function stopBlock(label, stop, isFinal) {
   </div>`;
 }
 
+// Compact one-line row for each remaining calling point in the full timetable.
+function stopRow(stop, isFinal) {
+  const td = stop.temporalData || {};
+  const tdArr = td.arrival || td.departure;
+  const arr = bestTime(tdArr);
+  const late = latenessMin(tdArr);
+  const plat = platformOf(stop.locationMetadata);
+  return `<div class="stoprow${isFinal ? " final" : ""}">
+    <span class="sr-name">${esc(locName(stop))}${isFinal ? ` <span class="sr-dest">DEST</span>` : ""}</span>
+    <span class="sr-right">
+      <span class="sr-eta">${etaText(arr)}</span>
+      <span class="sr-time">${fmtClock(arr)}${late >= 2 ? ` <span class="badge-late">+${late}</span>` : ""}${plat ? ` · P${esc(plat)}` : ""}</span>
+    </span>
+  </div>`;
+}
+
 function forgetTrain() {
   clearInterval(refreshTimer);
   locked = null;
-  sessionStorage.removeItem("mytrain.locked");
+  try { sessionStorage.removeItem("mytrain.locked"); } catch (_) {}
+  try { if (typeof history !== "undefined" && history.replaceState) history.replaceState(null, "", location.pathname); } catch (_) {}
   current = State.ACQUIRING;
   setStatus("LOCATING", "");
   renderNotice("FINDING YOU", "Re-checking your location…", true);
@@ -516,8 +587,14 @@ function esc(s) {
 async function boot() {
   if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(() => {});
 
+  let deepUid = null;
+  try { deepUid = new URLSearchParams(location.search).get("train"); } catch (_) {}
   const saved = sessionStorage.getItem("mytrain.locked");
-  if (saved) {
+
+  if (deepUid) {
+    // Deep link / QR target: go straight into this exact train's timetable.
+    lockOnto(deepUid, "", false);
+  } else if (saved) {
     try {
       locked = JSON.parse(saved);
       current = State.CONFIRMED;

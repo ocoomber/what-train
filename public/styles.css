@@ -180,6 +180,40 @@ body {
 .stop-time { font-size: 18px; color: var(--fg-dim); }
 .stop-plat { font-size: 15px; color: var(--fg-dim); }
 
+.train-status {
+  font-size: 17px;
+  color: var(--fg);
+  margin: 0 0 14px;
+}
+.auto-note {
+  font-size: 13px;
+  color: var(--fg-dim);
+  margin: 0 0 10px;
+}
+
+/* compact rows for the rest of the timetable */
+.stoprow {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+  padding: 13px 4px;
+  border-bottom: 1px solid var(--panel-edge);
+}
+.stoprow.final { border-bottom: none; }
+.sr-name { font-size: 20px; }
+.sr-dest {
+  font-size: 11px;
+  color: var(--bg);
+  background: var(--fg);
+  border-radius: 4px;
+  padding: 1px 5px;
+  margin-left: 6px;
+}
+.sr-right { text-align: right; white-space: nowrap; }
+.sr-eta { font-size: 18px; font-weight: 700; }
+.sr-time { display: block; font-size: 13px; color: var(--fg-dim); }
+
 .refresh-btn {
   position: sticky;
   bottom: 0;
