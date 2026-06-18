@@ -2,7 +2,7 @@
   "name": "My Train",
   "short_name": "My Train",
   "description": "What train am I on, and what's coming next.",
-  "start_url": "./index.html",
+  "start_url": "./",
   "scope": "./",
   "display": "standalone",
   "orientation": "portrait",
