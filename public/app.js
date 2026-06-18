@@ -23,8 +23,9 @@ const STATION_RADIUS_M = 300;
 const DIRECTION_TOLERANCE = 70;
 const REFRESH_MS = 60000;
 
-const State = { ACQUIRING: "ACQUIRING", STATION: "STATION", MOVING: "MOVING", CONFIRMED: "CONFIRMED" };
+const State = { ACQUIRING: "ACQUIRING", IDLE: "IDLE", STATION: "STATION", MOVING: "MOVING", CONFIRMED: "CONFIRMED" };
 let current = State.ACQUIRING;
+let idleCrs = null; // nearest-station CRS shown on the located/idle screen
 
 let stations = [];           // [{c,n,y,x}]
 let crsIndex = new Map();    // CRS -> {y,x}
@@ -177,6 +178,14 @@ function onPosition(pos) {
   evaluate();
 }
 
+function startGeo() {
+  if (!navigator.geolocation) return;
+  const opts = { enableHighAccuracy: true, maximumAge: 5000, timeout: 30000 };
+  // One quick request to get an initial fix fast, plus a continuous watch.
+  navigator.geolocation.getCurrentPosition(onPosition, () => {}, { enableHighAccuracy: true, timeout: 15000 });
+  navigator.geolocation.watchPosition(onPosition, onPositionError, opts);
+}
+
 function onPositionError(err) {
   if (current === State.CONFIRMED) return;
   if (err.code === err.PERMISSION_DENIED) {
@@ -195,17 +204,42 @@ function evaluate() {
     if (current !== State.MOVING) enterMoving();
     return;
   }
-  if (speedMph <= STOPPED_MPH) {
-    const near = nearestStation(lastFix, STATION_RADIUS_M);
-    if (near) {
-      if (current !== State.STATION || discovery.stationCrs !== near.station.c) enterStation(near.station);
-      return;
-    }
+
+  // Within range of a station (and not hurtling past) -> show its departures.
+  const near = nearestStation(lastFix, STATION_RADIUS_M);
+  if (near) {
+    if (current !== State.STATION || discovery.stationCrs !== near.station.c) enterStation(near.station);
+    return;
   }
-  if (current === State.ACQUIRING) {
-    setStatus("LOCATING", "");
-    renderNotice("FINDING YOU", "Waiting for a clearer GPS fix…", true);
-  }
+
+  // We have a fix, but you're not at a station or clearly on a moving train.
+  if (current !== State.STATION && current !== State.MOVING) showLocated();
+}
+
+// Shown when GPS is working but you're neither at a station nor on a fast train
+// (e.g. testing at home). Proves the location worked and offers the nearest board.
+function showLocated() {
+  const near = nearestStation(lastFix);
+  const crs = near ? near.station.c : null;
+  if (current === State.IDLE && idleCrs === crs) return; // avoid re-render churn
+  current = State.IDLE;
+  idleCrs = crs;
+  setStatus("LOCATED", "ok");
+
+  const dist = near
+    ? (near.distance < 1000 ? `${Math.round(near.distance)} m` : `${(near.distance / 1000).toFixed(1)} km`)
+    : "";
+  $screen.innerHTML = `<div class="notice">
+    <div class="big">GOT YOUR LOCATION ✓</div>
+    <div class="sub">You're not at a station or on a moving train yet.</div>
+    ${near ? `<div class="screen-title" style="margin-top:8px">Nearest station</div>
+      <div class="big" style="font-size:30px">${esc(near.station.n)}</div>
+      <div class="sub">${dist} away</div>
+      <button class="btn btn-wide" id="see-near">SEE ${esc(near.station.c)} DEPARTURES</button>` : ""}
+    <div class="sub">Board a train and I'll work out which one you're on.</div>
+  </div>`;
+  const b = document.getElementById("see-near");
+  if (b && near) b.onclick = () => enterStation(near.station);
 }
 
 // ---------- STATE 1: at a station ----------
@@ -470,7 +504,12 @@ function renderNotice(big, sub, spinner, isError, allowForget) {
     ${allowForget ? `<button class="link-btn" id="forget2">Pick a different train</button>` : ""}
   </div>`;
   const retry = document.getElementById("retry");
-  if (retry) retry.onclick = () => (current === State.CONFIRMED ? loadService(false) : (current = State.ACQUIRING, evaluate()));
+  if (retry) retry.onclick = () => {
+    if (current === State.CONFIRMED) return loadService(false);
+    current = State.ACQUIRING;
+    if (!lastFix) startGeo();
+    evaluate();
+  };
   const f2 = document.getElementById("forget2");
   if (f2) f2.onclick = forgetTrain;
 }
@@ -515,9 +554,16 @@ async function boot() {
     if (current !== State.CONFIRMED) renderNotice("NO GPS", "This device has no geolocation support.", false);
     return;
   }
-  navigator.geolocation.watchPosition(onPosition, onPositionError, {
-    enableHighAccuracy: true, maximumAge: 5000, timeout: 20000,
-  });
+  startGeo();
+
+  // If no fix and no error after a while, nudge the user about permissions/signal.
+  setTimeout(() => {
+    if (!lastFix && current === State.ACQUIRING) {
+      renderNotice("STILL FINDING YOU",
+        "Check that location is allowed for this site (tap the icon left of the address) and that battery saver is off. Being near a window helps.",
+        true, true);
+    }
+  }, 15000);
 }
 
 boot();
