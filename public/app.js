@@ -25,7 +25,6 @@ const REFRESH_MS = 60000;
 
 const State = { ACQUIRING: "ACQUIRING", IDLE: "IDLE", STATION: "STATION", MOVING: "MOVING", CONFIRMED: "CONFIRMED" };
 let current = State.ACQUIRING;
-let idleCrs = null; // nearest-station CRS shown on the located/idle screen
 
 let stations = [];           // [{c,n,y,x}]
 let crsIndex = new Map();    // CRS -> {y,x}
@@ -200,73 +199,62 @@ function onPositionError(err) {
 function evaluate() {
   if (current === State.CONFIRMED || !lastFix) return;
 
-  if (speedMph >= MOVING_MPH) {
+  // Moving with a known heading: try to pinpoint the specific train you're on
+  // (best-guess card + full list as fallback).
+  if (speedMph >= MOVING_MPH && bearing != null) {
     if (current !== State.MOVING) enterMoving();
     return;
   }
 
-  // Within range of a station (and not hurtling past) -> show its departures.
-  const near = nearestStation(lastFix, STATION_RADIUS_M);
-  if (near) {
-    if (current !== State.STATION || discovery.stationCrs !== near.station.c) enterStation(near.station);
-    return;
+  // Otherwise — including standing still on a platform or a stopped train —
+  // offer the nearest station's live departures as tappable candidates.
+  const near = nearestStation(lastFix);
+  if (!near) { showLocated(); return; }
+  if (current !== State.STATION || discovery.stationCrs !== near.station.c) {
+    enterStation(near.station, near.distance);
   }
-
-  // We have a fix, but you're not at a station or clearly on a moving train.
-  if (current !== State.STATION && current !== State.MOVING) showLocated();
 }
 
-// Shown when GPS is working but you're neither at a station nor on a fast train
-// (e.g. testing at home). Proves the location worked and offers the nearest board.
+// Rare fallback: we have a fix but no station data to list (e.g. dataset failed).
 function showLocated() {
-  const near = nearestStation(lastFix);
-  const crs = near ? near.station.c : null;
-  if (current === State.IDLE && idleCrs === crs) return; // avoid re-render churn
+  if (current === State.IDLE) return;
   current = State.IDLE;
-  idleCrs = crs;
   setStatus("LOCATED", "ok");
-
-  const dist = near
-    ? (near.distance < 1000 ? `${Math.round(near.distance)} m` : `${(near.distance / 1000).toFixed(1)} km`)
-    : "";
-  $screen.innerHTML = `<div class="notice">
-    <div class="big">GOT YOUR LOCATION ✓</div>
-    <div class="sub">You're not at a station or on a moving train yet.</div>
-    ${near ? `<div class="screen-title" style="margin-top:8px">Nearest station</div>
-      <div class="big" style="font-size:30px">${esc(near.station.n)}</div>
-      <div class="sub">${dist} away</div>
-      <button class="btn btn-wide" id="see-near">SEE ${esc(near.station.c)} DEPARTURES</button>` : ""}
-    <div class="sub">Board a train and I'll work out which one you're on.</div>
-  </div>`;
-  const b = document.getElementById("see-near");
-  if (b && near) b.onclick = () => enterStation(near.station);
+  renderNotice("GOT YOUR LOCATION ✓", "Couldn't find any nearby stations to list. Tap to try again.", false, true);
 }
 
 // ---------- STATE 1: at a station ----------
-async function enterStation(station) {
+async function enterStation(station, distance) {
   current = State.STATION;
   discovery = { stationCrs: station.c, services: null };
-  setStatus(`${station.c} STATION`, "ok");
-  renderNotice(station.n.toUpperCase(), "Loading live departures…", true);
+  setStatus(station.c, "ok");
+  renderNotice(station.n.toUpperCase(), "Loading live trains…", true);
   try {
     const data = await api(`/api/board/${station.c}`);
     if (current !== State.STATION || discovery.stationCrs !== station.c) return;
     discovery.services = data.services || [];
-    renderStation(station, discovery.services);
+    renderStation(station, discovery.services, distance);
   } catch (e) {
-    renderNotice("CAN'T LOAD DEPARTURES", e.message, false, true);
+    renderNotice("CAN'T LOAD TRAINS", e.message, false, true);
   }
 }
 
-function renderStation(station, services) {
+function renderStation(station, services, distance) {
+  const far = typeof distance === "number" && distance > STATION_RADIUS_M;
+  const distTxt = typeof distance === "number"
+    ? (distance < 1000 ? `${Math.round(distance)} m` : `${(distance / 1000).toFixed(1)} km`)
+    : "";
+  const heading = far
+    ? `${esc(station.n)} · ${distTxt} away — tap your train`
+    : `${esc(station.n)} · tap the train you're on`;
   const cards = services.length
     ? services.map(departureCard).join("")
-    : `<div class="notice"><div class="big">No departures listed</div></div>`;
+    : `<div class="notice"><div class="big">No trains listed right now</div><div class="sub">Try Reload — it may just be a quiet moment.</div></div>`;
   $screen.innerHTML =
-    `<div class="screen-title">${esc(station.n)} · departures</div>${cards}` +
-    refreshButton("Reload departures", "reload-board");
+    `<div class="screen-title">${heading}</div>${cards}` +
+    refreshButton("Reload", "reload-board");
   bindCards();
-  document.getElementById("reload-board").onclick = () => enterStation(station);
+  document.getElementById("reload-board").onclick = () => enterStation(station, distance);
 }
 
 function departureCard(s) {
@@ -455,7 +443,7 @@ function renderTrain(svc) {
 
   html += `<button class="btn btn-wide refresh-btn" id="refresh-now">↻ REFRESH</button>`;
   html += `<div class="updated-note">Updated ${fmtClock(new Date())} · auto-refresh 60s</div>`;
-  html += `<button class="link-btn" id="forget">Not this train? Start over</button>`;
+  html += `<button class="btn btn-wide" id="forget" style="margin-top:10px">SHOW ME A DIFFERENT TRAIN</button>`;
 
   $screen.innerHTML = html;
   document.getElementById("refresh-now").onclick = () => loadService(false);
