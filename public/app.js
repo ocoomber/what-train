@@ -37,8 +37,10 @@ let discovery = { stationCrs: null, services: null };
 let candidates = [];
 let candidateIdx = 0;
 
-let locked = null;           // {uid, op}
+let locked = null;           // {uid, op, auto}
 let refreshTimer = null;
+let geoWatchId = null;
+let lastSvc = null;          // last rendered service (for the QR screen's back button)
 
 const $screen = document.getElementById("screen");
 const $statusText = document.getElementById("status-text");
@@ -184,11 +186,20 @@ function onPosition(pos) {
 }
 
 function startGeo() {
-  if (!navigator.geolocation) return;
+  if (!navigator.geolocation || geoWatchId != null) return;
   const opts = { enableHighAccuracy: true, maximumAge: 5000, timeout: 30000 };
   // One quick request to get an initial fix fast, plus a continuous watch.
   navigator.geolocation.getCurrentPosition(onPosition, () => {}, { enableHighAccuracy: true, timeout: 15000 });
-  navigator.geolocation.watchPosition(onPosition, onPositionError, opts);
+  geoWatchId = navigator.geolocation.watchPosition(onPosition, onPositionError, opts);
+}
+
+// Once a train is locked we no longer need GPS — stop watching to save battery
+// and data. It resumes when the user asks for a different train.
+function stopGeo() {
+  if (geoWatchId != null && navigator.geolocation) {
+    try { navigator.geolocation.clearWatch(geoWatchId); } catch (_) {}
+  }
+  geoWatchId = null;
 }
 
 function onPositionError(err) {
@@ -391,6 +402,7 @@ function lockOnto(uid, op, auto) {
   } catch (_) {}
   current = State.CONFIRMED;
   setStatus("TRAIN LOCKED", "ok");
+  stopGeo();              // no need to track location once we know the train
   loadService();
   startAutoRefresh();
 }
@@ -422,6 +434,7 @@ async function loadService(silent) {
 }
 
 function renderTrain(svc) {
+  lastSvc = svc;
   const all = svc.locations || [];
   // Public calling points only (exclude PASS / CANCELLED / DIVERTED).
   const stops = all.filter((l) => {
@@ -494,14 +507,45 @@ function renderTrain(svc) {
   html += `<div class="updated-note">Updated ${fmtClock(new Date())} · auto-refresh 60s</div>`;
   html += `<div class="btn-row" style="margin-top:8px">
       <button class="btn" id="share">🔗 SHARE</button>
-      <button class="btn" id="forget">DIFFERENT TRAIN</button>
+      <button class="btn" id="qr">▦ QR</button>
     </div>`;
+  html += `<button class="btn btn-wide" id="forget" style="margin-top:10px">DIFFERENT TRAIN</button>`;
 
   $screen.innerHTML = html;
   document.getElementById("refresh-now").onclick = () => loadService(false);
   document.getElementById("forget").onclick = forgetTrain;
   const sh = document.getElementById("share");
   if (sh) sh.onclick = shareTrain;
+  const qr = document.getElementById("qr");
+  if (qr) qr.onclick = renderQR;
+}
+
+// Render a scannable QR of the deep link, so someone can point a camera at your
+// screen and open the same live train view — the same idea as on-train QR codes.
+function renderQR() {
+  if (!locked) return;
+  let url;
+  try { url = location.origin + location.pathname + "?train=" + encodeURIComponent(locked.uid); }
+  catch (_) { url = "?train=" + encodeURIComponent(locked.uid); }
+  let svg = "";
+  try {
+    if (window.qrcode) {
+      const qr = window.qrcode(0, "M");
+      qr.addData(url);
+      qr.make();
+      svg = qr.createSvgTag({ cellSize: 6, margin: 2, scalable: true });
+    }
+  } catch (_) {}
+  $screen.innerHTML = `<div class="notice">
+    <div class="screen-title">Scan to open this train</div>
+    ${svg ? `<div class="qr-box">${svg}</div>` : `<div class="sub">Couldn't draw a QR here — use Share instead.</div>`}
+    <div class="sub">Point a phone camera at this to open the same live timetable.</div>
+    <button class="btn btn-wide" id="qr-share">🔗 SHARE LINK</button>
+    <button class="btn btn-wide" id="qr-back" style="margin-top:10px">← BACK TO TRAIN</button>
+  </div>`;
+  const s = document.getElementById("qr-share");
+  if (s) s.onclick = shareTrain;
+  document.getElementById("qr-back").onclick = () => { if (lastSvc) renderTrain(lastSvc); else loadService(false); };
 }
 
 function locName(stop) {
@@ -548,9 +592,12 @@ function forgetTrain() {
   try { sessionStorage.removeItem("mytrain.locked"); } catch (_) {}
   try { if (typeof history !== "undefined" && history.replaceState) history.replaceState(null, "", location.pathname); } catch (_) {}
   current = State.ACQUIRING;
+  lastFix = null;
+  fixHistory = [];
+  lastSvc = null;
   setStatus("LOCATING", "");
   renderNotice("FINDING YOU", "Re-checking your location…", true);
-  evaluate();
+  startGeo();   // resume GPS to pick the next train
 }
 
 // ---------- rendering primitives ----------
@@ -615,8 +662,11 @@ async function boot() {
     if (current !== State.CONFIRMED) renderNotice("LOAD ERROR", "Couldn't load station data. Reload the app.", false, true);
   }
 
+  // If we opened straight into a locked train (deep link / saved), don't start GPS.
+  if (current === State.CONFIRMED) return;
+
   if (!navigator.geolocation) {
-    if (current !== State.CONFIRMED) renderNotice("NO GPS", "This device has no geolocation support.", false);
+    renderNotice("NO GPS", "This device has no geolocation support.", false);
     return;
   }
   startGeo();
