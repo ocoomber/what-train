@@ -1,37 +1,42 @@
-/* My Train — vanilla JS PWA.
+/* My Train — vanilla JS PWA (Realtime Trains API v2 via the Worker proxy).
  *
  * Fires GPS on load (no buttons) and resolves into one of three states:
  *   1. AT A STATION  -> tappable live departures
  *   2. ON A TRAIN, UNIDENTIFIED -> best-guess card (YES / NOT THIS ONE), then fallback list
  *   3. TRAIN CONFIRMED -> next stop / stop after / destination ETAs, auto-refresh 60s
+ *
+ * v2 data model notes (see RTT OpenAPI spec):
+ *   - times are ISO 8601 datetimes inside temporalData.{arrival,departure,pass}
+ *     as scheduleAdvertised (booked), realtimeForecast/realtimeActual (live).
+ *   - lateness is precomputed in minutes (realtimeAdvertisedLateness).
+ *   - a service is identified by scheduleMetadata.uniqueIdentity (e.g. "gb-nr:L01525:2026-06-18").
+ *   - destination[].location.shortCodes[0] gives the destination CRS, used for direction.
  */
 
 "use strict";
 
 const API_BASE = (window.MYTRAIN_CONFIG && window.MYTRAIN_CONFIG.API_BASE || "").replace(/\/$/, "");
 
-// Thresholds
-const STOPPED_MPH = 3;      // at/near zero
-const MOVING_MPH = 30;      // confidently on a moving train
+const STOPPED_MPH = 3;
+const MOVING_MPH = 30;
 const STATION_RADIUS_M = 300;
-const DIRECTION_TOLERANCE = 70; // deg; for "ahead" / direction-match scoring
+const DIRECTION_TOLERANCE = 70;
 const REFRESH_MS = 60000;
 
-// ---- app state ----
 const State = { ACQUIRING: "ACQUIRING", STATION: "STATION", MOVING: "MOVING", CONFIRMED: "CONFIRMED" };
 let current = State.ACQUIRING;
 
-let stations = [];          // [{c,n,y,x}]
-let nameIndex = new Map();  // normalized name -> {y,x}
-let lastFix = null;         // last good position
+let stations = [];           // [{c,n,y,x}]
+let crsIndex = new Map();    // CRS -> {y,x}
+let lastFix = null;
 let speedMph = 0;
-let bearing = null;         // degrees 0..360, or null
+let bearing = null;
 
-let discovery = { stationCrs: null, services: null };  // cached board for current discovery
-let candidates = [];        // state-2 ordered guesses
+let discovery = { stationCrs: null, services: null };
+let candidates = [];
 let candidateIdx = 0;
 
-let locked = null;          // {uid, runDate, atocName}
+let locked = null;           // {uid, op}
 let refreshTimer = null;
 
 const $screen = document.getElementById("screen");
@@ -45,41 +50,21 @@ const toDeg = (r) => (r * 180) / Math.PI;
 
 function distanceM(a, b) {
   const R = 6371000;
-  const dLat = toRad(b.y - a.y);
-  const dLon = toRad(b.x - a.x);
+  const dLat = toRad(b.y - a.y), dLon = toRad(b.x - a.x);
   const lat1 = toRad(a.y), lat2 = toRad(b.y);
   const h = Math.sin(dLat / 2) ** 2 + Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLon / 2) ** 2;
   return 2 * R * Math.asin(Math.sqrt(h));
 }
-
 function bearingDeg(a, b) {
-  const lat1 = toRad(a.y), lat2 = toRad(b.y);
-  const dLon = toRad(b.x - a.x);
+  const lat1 = toRad(a.y), lat2 = toRad(b.y), dLon = toRad(b.x - a.x);
   const y = Math.sin(dLon) * Math.cos(lat2);
   const x = Math.cos(lat1) * Math.sin(lat2) - Math.sin(lat1) * Math.cos(lat2) * Math.cos(dLon);
   return (toDeg(Math.atan2(y, x)) + 360) % 360;
 }
-
 function angleDiff(a, b) {
   let d = Math.abs(a - b) % 360;
   return d > 180 ? 360 - d : d;
 }
-
-function normName(s) {
-  return (s || "").toLowerCase().replace(/[^a-z0-9]/g, "");
-}
-
-function geocodeName(desc) {
-  const exact = nameIndex.get(normName(desc));
-  if (exact) return exact;
-  // RTT descriptions sometimes drop/add prefixes; try a few loosened forms.
-  const n = normName(desc);
-  for (const [k, v] of nameIndex) {
-    if (k === n || k.endsWith(n) || n.endsWith(k)) return v;
-  }
-  return null;
-}
-
 function nearestStation(pos, maxM) {
   let best = null, bestD = Infinity;
   for (const s of stations) {
@@ -89,17 +74,13 @@ function nearestStation(pos, maxM) {
   if (maxM != null && bestD > maxM) return null;
   return best ? { station: best, distance: bestD } : null;
 }
-
-// Nearest station that lies ahead of us along the current bearing (fallback: nearest overall).
 function stationAhead(pos) {
   if (bearing == null) return nearestStation(pos);
   let best = null, bestD = Infinity;
   for (const s of stations) {
     const d = distanceM(pos, s);
-    if (d < 150 || d > 30000) continue; // skip the one we're basically at, and far ones
-    if (angleDiff(bearingDeg(pos, s), bearing) <= DIRECTION_TOLERANCE && d < bestD) {
-      bestD = d; best = s;
-    }
+    if (d < 150 || d > 30000) continue;
+    if (angleDiff(bearingDeg(pos, s), bearing) <= DIRECTION_TOLERANCE && d < bestD) { bestD = d; best = s; }
   }
   return best ? { station: best, distance: bestD } : nearestStation(pos);
 }
@@ -109,39 +90,52 @@ function setStatus(text, kind) {
   $statusText.textContent = text;
   $statusDot.className = "dot" + (kind ? " " + kind : "");
 }
+function compass(deg) { return ["N", "NE", "E", "SE", "S", "SW", "W", "NW"][Math.round(deg / 45) % 8]; }
 function updateSpeedReadout() {
-  if (lastFix) {
-    const b = bearing == null ? "" : " " + compass(bearing);
-    $speed.textContent = `${Math.round(speedMph)} mph${b}`;
-  }
-}
-function compass(deg) {
-  return ["N", "NE", "E", "SE", "S", "SW", "W", "NW"][Math.round(deg / 45) % 8];
+  if (lastFix) $speed.textContent = `${Math.round(speedMph)} mph${bearing == null ? "" : " " + compass(bearing)}`;
 }
 
-// ---------- time helpers ----------
-function parseHHMM(hhmm, base) {
-  if (!hhmm || hhmm.length < 4) return null;
-  const d = new Date(base);
-  d.setHours(parseInt(hhmm.slice(0, 2), 10), parseInt(hhmm.slice(2, 4), 10), 0, 0);
-  return d;
+// ---------- time helpers (ISO datetimes in v2) ----------
+function parseTime(iso) {
+  if (!iso) return null;
+  const d = new Date(iso);
+  return isNaN(d.getTime()) ? null : d;
 }
-function fmtHHMM(hhmm) {
-  return hhmm && hhmm.length >= 4 ? `${hhmm.slice(0, 2)}:${hhmm.slice(2, 4)}` : "--:--";
+function fmtClock(d) {
+  return d ? `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}` : "--:--";
 }
-function minsFromNow(date) {
-  return Math.round((date.getTime() - Date.now()) / 60000);
-}
-function etaText(date) {
-  if (!date) return "";
-  const m = minsFromNow(date);
+function etaText(d) {
+  if (!d) return "";
+  const m = Math.round((d.getTime() - Date.now()) / 60000);
   if (m <= 0) return "DUE";
   if (m === 1) return "1 MIN";
-  if (m > 180) return fmtHHMM2(date);
+  if (m > 180) return fmtClock(d);
   return `${m} MIN`;
 }
-function fmtHHMM2(d) {
-  return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+
+// ---------- v2 field extraction ----------
+// Best displayed time for an IndividualTemporalData block: live forecast/actual, else booked.
+function bestTime(td) {
+  if (!td) return null;
+  return parseTime(td.realtimeForecast) || parseTime(td.realtimeActual) || parseTime(td.scheduleAdvertised);
+}
+function bookedTime(td) { return td ? parseTime(td.scheduleAdvertised) : null; }
+function latenessMin(td) {
+  if (!td) return 0;
+  if (typeof td.realtimeAdvertisedLateness === "number") return td.realtimeAdvertisedLateness;
+  const b = bookedTime(td), live = parseTime(td.realtimeForecast) || parseTime(td.realtimeActual);
+  return b && live ? Math.round((live - b) / 60000) : 0;
+}
+function platformOf(meta) {
+  const p = meta && meta.platform;
+  return p ? (p.actual || p.planned || "") : "";
+}
+function destInfo(svc) {
+  const d = svc.destination && svc.destination[0] && svc.destination[0].location;
+  return {
+    name: (d && d.description) || "—",
+    crs: (d && d.shortCodes && d.shortCodes[0]) || null,
+  };
 }
 
 // ---------- RTT API ----------
@@ -158,21 +152,11 @@ async function api(path) {
   return res.json();
 }
 
-const todayParts = () => {
-  const d = new Date();
-  return {
-    Y: d.getFullYear(),
-    M: String(d.getMonth() + 1).padStart(2, "0"),
-    D: String(d.getDate()).padStart(2, "0"),
-  };
-};
-
 // ---------- main GPS loop ----------
 function onPosition(pos) {
   const c = pos.coords;
   const fix = { y: c.latitude, x: c.longitude, t: pos.timestamp };
 
-  // speed: prefer device-reported (m/s), else derive from consecutive fixes
   let mps = (typeof c.speed === "number" && c.speed >= 0) ? c.speed : null;
   if (mps == null && lastFix) {
     const dt = (fix.t - lastFix.t) / 1000;
@@ -180,7 +164,6 @@ function onPosition(pos) {
   }
   if (mps != null) speedMph = mps * 2.23694;
 
-  // bearing: prefer device heading when moving, else derive
   if (typeof c.heading === "number" && !isNaN(c.heading) && speedMph > STOPPED_MPH) {
     bearing = c.heading;
   } else if (lastFix && distanceM(lastFix, fix) > 8) {
@@ -193,7 +176,7 @@ function onPosition(pos) {
 }
 
 function onPositionError(err) {
-  if (current === State.CONFIRMED) return; // keep showing the locked train
+  if (current === State.CONFIRMED) return;
   if (err.code === err.PERMISSION_DENIED) {
     setStatus("NO GPS", "err");
     renderNotice("LOCATION BLOCKED", "Allow location access for this site, then reload. My Train needs GPS to find your train.", false);
@@ -203,27 +186,20 @@ function onPositionError(err) {
   }
 }
 
-// Decide which state we should be in (discovery states only; CONFIRMED is sticky).
 function evaluate() {
-  if (current === State.CONFIRMED) return;
-  if (!lastFix) return;
+  if (current === State.CONFIRMED || !lastFix) return;
 
   if (speedMph >= MOVING_MPH) {
     if (current !== State.MOVING) enterMoving();
     return;
   }
-
   if (speedMph <= STOPPED_MPH) {
     const near = nearestStation(lastFix, STATION_RADIUS_M);
     if (near) {
-      if (current !== State.STATION || discovery.stationCrs !== near.station.c) {
-        enterStation(near.station);
-      }
+      if (current !== State.STATION || discovery.stationCrs !== near.station.c) enterStation(near.station);
       return;
     }
   }
-
-  // In-between speed, or stopped but not at a station: hold a discovery screen if we have one.
   if (current === State.ACQUIRING) {
     setStatus("LOCATING", "");
     renderNotice("FINDING YOU", "Waiting for a clearer GPS fix…", true);
@@ -239,7 +215,7 @@ async function enterStation(station) {
   try {
     const data = await api(`/api/board/${station.c}`);
     if (current !== State.STATION || discovery.stationCrs !== station.c) return;
-    discovery.services = (data.services || []).filter((s) => s.locationDetail);
+    discovery.services = data.services || [];
     renderStation(station, discovery.services);
   } catch (e) {
     renderNotice("CAN'T LOAD DEPARTURES", e.message, false, true);
@@ -248,30 +224,35 @@ async function enterStation(station) {
 
 function renderStation(station, services) {
   const cards = services.length
-    ? services.map((s) => departureCard(s)).join("")
+    ? services.map(departureCard).join("")
     : `<div class="notice"><div class="big">No departures listed</div></div>`;
   $screen.innerHTML =
     `<div class="screen-title">${esc(station.n)} · departures</div>${cards}` +
-    refreshLink("Reload departures", "reload-board");
+    refreshButton("Reload departures", "reload-board");
   bindCards();
   document.getElementById("reload-board").onclick = () => enterStation(station);
 }
 
 function departureCard(s) {
-  const ld = s.locationDetail;
-  const dest = (ld.destination && ld.destination[0] && ld.destination[0].description) || "—";
-  const booked = ld.gbttBookedDeparture;
-  const rt = ld.realtimeDeparture;
-  const late = booked && rt && booked !== rt;
-  const timeHtml = late
-    ? `<span class="strike">${fmtHHMM(booked)}</span> <span class="badge-late">${fmtHHMM(rt)}</span>`
-    : `${fmtHHMM(booked || rt)}`;
-  const plat = ld.platform ? `Plat ${esc(ld.platform)}` : "Plat —";
-  const op = s.atocName || s.atocCode || "";
-  return `<button class="card" data-uid="${esc(s.serviceUid)}" data-rundate="${esc(s.runDate || "")}" data-op="${esc(op)}">
+  const dep = s.temporalData && s.temporalData.departure;
+  const dest = destInfo(s);
+  const booked = bookedTime(dep);
+  const live = bestTime(dep);
+  const late = latenessMin(dep) >= 1;
+  const cancelled = (s.temporalData && (s.temporalData.displayAs === "CANCELLED")) ||
+    (dep && dep.isCancelled);
+  const timeHtml = cancelled
+    ? `<span class="badge-late">CANCELLED</span>`
+    : (late
+      ? `<span class="strike">${fmtClock(booked)}</span> <span class="badge-late">${fmtClock(live)}</span>`
+      : `${fmtClock(live || booked)}`);
+  const plat = platformOf(s.locationMetadata);
+  const op = (s.scheduleMetadata && s.scheduleMetadata.operator && s.scheduleMetadata.operator.name) || "";
+  const uid = (s.scheduleMetadata && s.scheduleMetadata.uniqueIdentity) || "";
+  return `<button class="card" data-uid="${esc(uid)}" data-op="${esc(op)}">
     <div class="card-row"><span class="card-time">${timeHtml}</span></div>
-    <div class="card-dest">${esc(dest)}</div>
-    <div class="card-meta"><span>${esc(op)}</span><span class="card-plat">${plat}</span></div>
+    <div class="card-dest">${esc(dest.name)}</div>
+    <div class="card-meta"><span>${esc(op)}</span><span class="card-plat">${plat ? "Plat " + esc(plat) : "Plat —"}</span></div>
   </button>`;
 }
 
@@ -288,33 +269,27 @@ async function enterMoving() {
   try {
     const data = await api(`/api/board/${ahead.station.c}`);
     if (current !== State.MOVING) return;
-    const services = (data.services || []).filter((s) => s.locationDetail);
+    const services = data.services || [];
+    discovery = { stationCrs: ahead.station.c, services };
     candidates = rankByDirection(services, ahead.station);
-    discovery = { stationCrs: ahead.station.c, services }; // for fallback list
-    if (candidates.length) {
-      candidateIdx = 0;
-      renderGuess();
-    } else {
-      renderFallbackList(ahead.station, services);
-    }
+    if (candidates.length) { candidateIdx = 0; renderGuess(); }
+    else renderFallbackList(ahead.station, services);
   } catch (e) {
     renderNotice("CAN'T IDENTIFY TRAIN", e.message, false, true);
   }
 }
 
-// Score departures: those heading in our direction of travel first.
+// Rank departures so those heading our way come first (using destination CRS coords).
 function rankByDirection(services, atStation) {
   const from = { y: atStation.y, x: atStation.x };
   return services
     .map((s) => {
-      const destDesc = s.locationDetail.destination && s.locationDetail.destination[0]
-        && s.locationDetail.destination[0].description;
-      const dest = geocodeName(destDesc);
+      const crs = destInfo(s).crs;
+      const dest = crs ? crsIndex.get(crs) : null;
       let score = 999;
       if (dest && bearing != null) score = angleDiff(bearingDeg(from, dest), bearing);
       return { s, score };
     })
-    // keep direction matches (or everything if we have no bearing to filter on)
     .filter((x) => bearing == null || x.score <= DIRECTION_TOLERANCE || x.score === 999)
     .sort((a, b) => a.score - b.score)
     .map((x) => x.s);
@@ -322,17 +297,18 @@ function rankByDirection(services, atStation) {
 
 function renderGuess() {
   const s = candidates[candidateIdx];
-  const ld = s.locationDetail;
-  const dest = (ld.destination && ld.destination[0] && ld.destination[0].description) || "—";
-  const time = fmtHHMM(ld.realtimeDeparture || ld.gbttBookedDeparture);
-  const op = s.atocName || s.atocCode || "";
+  const dep = s.temporalData && s.temporalData.departure;
+  const dest = destInfo(s);
+  const time = fmtClock(bestTime(dep));
+  const op = (s.scheduleMetadata && s.scheduleMetadata.operator && s.scheduleMetadata.operator.name) || "";
+  const uid = (s.scheduleMetadata && s.scheduleMetadata.uniqueIdentity) || "";
   const remaining = candidates.length - candidateIdx - 1;
   $screen.innerHTML = `
     <div class="screen-title">Are you on this train?</div>
     <div class="guess-wrap">
       <div class="guess-card">
         <div class="card-row"><span class="card-time">${time}</span></div>
-        <div class="card-dest">${esc(dest)}</div>
+        <div class="card-dest">${esc(dest.name)}</div>
         <div class="card-meta"><span>${esc(op)}</span></div>
         <div class="candidate-count">${remaining > 0 ? remaining + " other option(s)" : "last option"}</div>
       </div>
@@ -340,11 +316,9 @@ function renderGuess() {
         <button class="btn btn-yes" id="g-yes">✓ YES</button>
         <button class="btn btn-no" id="g-no">✗ NOT THIS ONE</button>
       </div>
-    </div>` +
-    `<button class="link-btn" id="g-list">Show all departures instead</button>`;
-
-  document.getElementById("g-yes").onclick = () =>
-    lockOnto(s.serviceUid, s.runDate, op);
+    </div>
+    <button class="link-btn" id="g-list">Show all departures instead</button>`;
+  document.getElementById("g-yes").onclick = () => lockOnto(uid, op);
   document.getElementById("g-no").onclick = nextCandidate;
   document.getElementById("g-list").onclick = () =>
     renderFallbackList({ c: discovery.stationCrs, n: discovery.stationCrs }, discovery.services);
@@ -352,82 +326,81 @@ function renderGuess() {
 
 function nextCandidate() {
   candidateIdx++;
-  if (candidateIdx < candidates.length) {
-    renderGuess();
-  } else {
-    renderFallbackList({ c: discovery.stationCrs, n: discovery.stationCrs }, discovery.services || []);
-  }
+  if (candidateIdx < candidates.length) renderGuess();
+  else renderFallbackList({ c: discovery.stationCrs, n: discovery.stationCrs }, discovery.services || []);
 }
 
 function renderFallbackList(station, services) {
-  const cards = (services || []).map((s) => departureCard(s)).join("")
+  const cards = (services || []).map(departureCard).join("")
     || `<div class="notice"><div class="big">No departures found</div></div>`;
   $screen.innerHTML =
     `<div class="screen-title">Tap the train you're on (${esc(station.c)})</div>${cards}` +
-    refreshLink("Re-scan", "rescan");
+    refreshButton("Re-scan", "rescan");
   bindCards();
   document.getElementById("rescan").onclick = enterMoving;
 }
 
 // ---------- STATE 3: confirmed ----------
-function lockOnto(uid, runDate, atocName) {
-  locked = { uid, runDate: runDate || rundateToday(), atocName: atocName || "" };
+function lockOnto(uid, op) {
+  if (!uid) return;
+  locked = { uid, op: op || "" };
   sessionStorage.setItem("mytrain.locked", JSON.stringify(locked));
   current = State.CONFIRMED;
   setStatus("TRAIN LOCKED", "ok");
   loadService();
   startAutoRefresh();
 }
-function rundateToday() {
-  const t = todayParts();
-  return `${t.Y}-${t.M}-${t.D}`;
-}
-
 function startAutoRefresh() {
   clearInterval(refreshTimer);
   refreshTimer = setInterval(() => { if (current === State.CONFIRMED) loadService(true); }, REFRESH_MS);
 }
-
 async function loadService(silent) {
   if (!locked) return;
-  const [Y, M, D] = locked.runDate.split("-");
   if (!silent) renderNotice("LOADING TRAIN", "Fetching live progress…", true);
   try {
-    const data = await api(`/api/service/${locked.uid}/${Y}/${M}/${D}`);
-    renderTrain(data);
+    const data = await api(`/api/service?uid=${encodeURIComponent(locked.uid)}`);
+    renderTrain(data.service || data);
   } catch (e) {
     if (!silent) renderNotice("CAN'T LOAD TRAIN", e.message, false, true, true);
   }
 }
 
 function renderTrain(svc) {
-  const base = svc.runDate ? new Date(svc.runDate + "T00:00:00") : new Date();
-  const stops = (svc.locations || []).filter((l) => l.displayAs !== "PASS" && (l.crs || l.description));
+  const all = svc.locations || [];
+  // Public calling points only (exclude PASS / CANCELLED / DIVERTED).
+  const stops = all.filter((l) => {
+    const da = l.temporalData && l.temporalData.displayAs;
+    return da === "CALL" || da === "STARTS" || da === "TERMINATES";
+  });
+  if (!stops.length) { renderNotice("NO STOP DATA", "This service has no calling points to show.", false, true, true); return; }
 
-  // most recent stop we've actually departed
   let lastDeparted = -1;
-  stops.forEach((l, i) => { if (l.realtimeDepartureActual) lastDeparted = i; });
+  stops.forEach((l, i) => {
+    if (l.temporalData && l.temporalData.departure && l.temporalData.departure.realtimeActual) lastDeparted = i;
+  });
 
   const finalIdx = stops.length - 1;
   const final = stops[finalIdx];
-  const arrived = final && final.realtimeArrivalActual;
+  const arrived = final.temporalData && final.temporalData.arrival && final.temporalData.arrival.realtimeActual;
 
   const nextIdx = arrived ? -1 : Math.min(lastDeparted + 1, finalIdx);
   const next = nextIdx >= 0 ? stops[nextIdx] : null;
-  const after = nextIdx >= 0 && nextIdx + 1 <= finalIdx && nextIdx + 1 !== finalIdx ? stops[nextIdx + 1] : null;
+  const after = next && nextIdx + 1 <= finalIdx && nextIdx + 1 !== finalIdx ? stops[nextIdx + 1] : null;
 
-  // delay computed at the next stop (or destination if arrived)
   const probe = next || final;
-  const delayMin = delayAt(probe, base);
-  const reason = svc.cancelReason && svc.cancelReason.longText
-    || svc.lateReason && svc.lateReason.longText || "";
+  const probeTd = (probe.temporalData && (probe.temporalData.arrival || probe.temporalData.departure)) || null;
+  const delayMin = latenessMin(probeTd);
 
-  const op = svc.atocName || locked.atocName || "";
-  const finalName = final ? (final.description || final.crs) : "—";
+  const reasons = svc.reasons && svc.reasons[0];
+  const reason = reasons ? (reasons.longText || reasons.shortText || "") : "";
+
+  const op = (svc.scheduleMetadata && svc.scheduleMetadata.operator && svc.scheduleMetadata.operator.name) || locked.op || "";
+  const finalName = locName(final);
+  const headcode = (svc.scheduleMetadata && (svc.scheduleMetadata.trainReportingIdentity || svc.scheduleMetadata.identity)) || "";
 
   let html = `<div class="train-head">
       <div class="op">${esc(op)}</div>
-      <div class="final">to ${esc(finalName)}<br>${svc.trainIdentity ? esc(svc.trainIdentity) : ""}</div>
+      <div class="final">to ${esc(finalName)}${headcode ? `<br>${esc(headcode)}` : ""}</div>
     </div>`;
 
   if (arrived) {
@@ -439,13 +412,13 @@ function renderTrain(svc) {
   }
 
   if (!arrived && next) {
-    html += stopBlock("NEXT STOP", next, base);
-    if (after) html += stopBlock("THEN", after, base);
-    if (final && final !== next && final !== after) html += stopBlock("FINAL DESTINATION", final, base, true);
+    html += stopBlock("NEXT STOP", next);
+    if (after) html += stopBlock("THEN", after);
+    if (final !== next && final !== after) html += stopBlock("FINAL DESTINATION", final, true);
   }
 
   html += `<button class="btn btn-wide refresh-btn" id="refresh-now">↻ REFRESH</button>`;
-  html += `<div class="updated-note">Updated ${fmtHHMM2(new Date())} · auto-refresh 60s</div>`;
+  html += `<div class="updated-note">Updated ${fmtClock(new Date())} · auto-refresh 60s</div>`;
   html += `<button class="link-btn" id="forget">Not this train? Start over</button>`;
 
   $screen.innerHTML = html;
@@ -453,29 +426,26 @@ function renderTrain(svc) {
   document.getElementById("forget").onclick = forgetTrain;
 }
 
-function stopBlock(label, stop, base, isFinal) {
-  const arr = stop.realtimeArrival || stop.gbttBookedArrival || stop.realtimeDeparture || stop.gbttBookedDeparture;
-  const booked = stop.gbttBookedArrival || stop.gbttBookedDeparture;
-  const eta = parseHHMM(arr, base);
-  const plat = stop.platform ? `Plat ${esc(stop.platform)}` : "";
-  return `<div class="stop${isFinal ? " final" : ""}">
-    <div class="stop-label">${label}</div>
-    <div class="stop-name">${esc(stop.description || stop.crs)}</div>
-    <div class="stop-bottom">
-      <span class="stop-eta">${eta ? etaText(eta) : ""}</span>
-      <span class="stop-time">${fmtHHMM(arr)}${booked && booked !== arr ? ` <span class="strike">${fmtHHMM(booked)}</span>` : ""}</span>
-    </div>
-    ${plat ? `<div class="stop-plat">${plat}</div>` : ""}
-  </div>`;
+function locName(stop) {
+  return (stop.location && (stop.location.description || (stop.location.shortCodes && stop.location.shortCodes[0]))) || "—";
 }
 
-function delayAt(stop, base) {
-  if (!stop) return 0;
-  const booked = stop.gbttBookedArrival || stop.gbttBookedDeparture;
-  const rt = stop.realtimeArrival || stop.realtimeDeparture;
-  const b = parseHHMM(booked, base), r = parseHHMM(rt, base);
-  if (!b || !r) return 0;
-  return Math.round((r - b) / 60000);
+function stopBlock(label, stop, isFinal) {
+  const td = stop.temporalData || {};
+  const tdArr = td.arrival || td.departure;       // intermediate/destination use arrival; origin uses departure
+  const arr = bestTime(tdArr);
+  const booked = bookedTime(tdArr);
+  const plat = platformOf(stop.locationMetadata);
+  const showBooked = booked && arr && Math.abs(booked - arr) >= 60000;
+  return `<div class="stop${isFinal ? " final" : ""}">
+    <div class="stop-label">${label}</div>
+    <div class="stop-name">${esc(locName(stop))}</div>
+    <div class="stop-bottom">
+      <span class="stop-eta">${etaText(arr)}</span>
+      <span class="stop-time">${fmtClock(arr)}${showBooked ? ` <span class="strike">${fmtClock(booked)}</span>` : ""}</span>
+    </div>
+    ${plat ? `<div class="stop-plat">Plat ${esc(plat)}</div>` : ""}
+  </div>`;
 }
 
 function forgetTrain() {
@@ -502,17 +472,12 @@ function renderNotice(big, sub, spinner, isError, allowForget) {
   const f2 = document.getElementById("forget2");
   if (f2) f2.onclick = forgetTrain;
 }
-
-function refreshLink(label, id) {
-  return `<button class="btn btn-wide" id="${id}">↻ ${esc(label)}</button>`;
-}
-
+function refreshButton(label, id) { return `<button class="btn btn-wide" id="${id}">↻ ${esc(label)}</button>`; }
 function bindCards() {
   $screen.querySelectorAll(".card").forEach((el) => {
-    el.onclick = () => lockOnto(el.dataset.uid, el.dataset.rundate, el.dataset.op);
+    el.onclick = () => lockOnto(el.dataset.uid, el.dataset.op);
   });
 }
-
 function esc(s) {
   return String(s == null ? "" : s).replace(/[&<>"']/g, (c) =>
     ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -520,11 +485,8 @@ function esc(s) {
 
 // ---------- boot ----------
 async function boot() {
-  if ("serviceWorker" in navigator) {
-    navigator.serviceWorker.register("sw.js").catch(() => {});
-  }
+  if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(() => {});
 
-  // Restore a locked train across reloads / signal dropouts.
   const saved = sessionStorage.getItem("mytrain.locked");
   if (saved) {
     try {
@@ -542,7 +504,7 @@ async function boot() {
   try {
     const res = await fetch("stations.json");
     stations = await res.json();
-    nameIndex = new Map(stations.map((s) => [normName(s.n), { y: s.y, x: s.x }]));
+    crsIndex = new Map(stations.map((s) => [s.c, { y: s.y, x: s.x }]));
   } catch (_) {
     if (current !== State.CONFIRMED) renderNotice("LOAD ERROR", "Couldn't load station data. Reload the app.", false, true);
   }
@@ -552,9 +514,7 @@ async function boot() {
     return;
   }
   navigator.geolocation.watchPosition(onPosition, onPositionError, {
-    enableHighAccuracy: true,
-    maximumAge: 5000,
-    timeout: 20000,
+    enableHighAccuracy: true, maximumAge: 5000, timeout: 20000,
   });
 }
 

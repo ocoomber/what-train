@@ -21,9 +21,11 @@ The app reads your GPS speed and heading and resolves into one of three states:
 
 ## Architecture
 
-- **`worker/`** — a Cloudflare Worker that proxies the [Realtime Trains](https://api.rtt.io/)
-  API, keeping the credentials server-side (HTTP Basic Auth via Worker secrets)
-  and adding CORS + brief edge caching.
+- **`worker/`** — a Cloudflare Worker that proxies the next-generation
+  [Realtime Trains API](https://api-portal.rtt.io/) (`data.rtt.io`, spec v2),
+  keeping the bearer token server-side (RTT's terms require this) and adding CORS
+  + brief edge caching. Supports either a long-life access token or a refresh
+  token (which it exchanges for short-life access tokens automatically).
 - **`public/`** — a vanilla-JS PWA (no frameworks) for Cloudflare Pages: app
   shell + service worker for offline launch, a bundled UK station-coordinate
   dataset (`stations.json`), and the geolocation state machine in `app.js`.
