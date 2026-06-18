@@ -214,6 +214,15 @@ body {
 .sr-eta { font-size: 18px; font-weight: 700; }
 .sr-time { display: block; font-size: 13px; color: var(--fg-dim); }
 
+.qr-box {
+  background: #fff;
+  padding: 14px;
+  border-radius: 14px;
+  display: inline-block;
+  line-height: 0;
+}
+.qr-box svg { width: 70vw; max-width: 320px; height: auto; display: block; }
+
 .refresh-btn {
   position: sticky;
   bottom: 0;
