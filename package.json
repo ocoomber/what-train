@@ -1,0 +1,13 @@
+{
+  "name": "what-train",
+  "version": "1.0.0",
+  "private": true,
+  "description": "My Train PWA — Worker that serves the static site and proxies the RTT API.",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy"
+  },
+  "devDependencies": {
+    "wrangler": "^4"
+  }
+}
