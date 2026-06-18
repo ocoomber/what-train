@@ -1,10 +1,10 @@
-/* Shared helper for the My Train Pages Functions.
- * Files/dirs starting with "_" are not routed by Cloudflare Pages, so this is a
- * private module imported by the route handlers.
+/**
+ * My Train — Worker (Workers Static Assets).
  *
- * Proxies the Realtime Trains API v2 (https://data.rtt.io) with a bearer token
- * kept server-side. Set ONE of these on the Pages project (Settings → Variables
- * and Secrets):
+ * Static files in ./public are served automatically; this Worker only handles
+ * requests that don't match a static file — i.e. the API under /api/*. It
+ * proxies the Realtime Trains API v2 (https://data.rtt.io) with a bearer token
+ * kept server-side. Set ONE of these as a Worker variable/secret:
  *   - RTT_ACCESS_TOKEN  : a long-life access token, used directly.
  *   - RTT_REFRESH_TOKEN : a refresh token; exchanged for short-life access tokens.
  * Optional RTT_API_VERSION (ISO date) pins the API version.
@@ -12,20 +12,22 @@
 
 const RTT_BASE = "https://data.rtt.io";
 
-export function json(body, status = 200, extraHeaders = {}) {
+function json(body, status = 200, extraHeaders = {}) {
   return new Response(JSON.stringify(body), {
     status,
     headers: { "Content-Type": "application/json; charset=utf-8", ...extraHeaders },
   });
 }
 
-// Cached minted access token (per isolate).
-let tokenCache = null;
+const isCrs = (s) => /^[A-Za-z]{3}$/.test(s);
+const isUid = (s) => /^[A-Za-z0-9:_-]{5,48}$/.test(s) && s.includes(":");
+
+let tokenCache = null; // minted access token, per isolate
 
 async function getBearer(env) {
   if (env.RTT_ACCESS_TOKEN) return env.RTT_ACCESS_TOKEN;
   if (!env.RTT_REFRESH_TOKEN) {
-    throw new Error("Missing RTT_ACCESS_TOKEN or RTT_REFRESH_TOKEN. Set it in the Pages project settings.");
+    throw new Error("Missing RTT_ACCESS_TOKEN or RTT_REFRESH_TOKEN. Set it in the Worker's settings.");
   }
   if (tokenCache && tokenCache.exp - 60000 > Date.now()) return tokenCache.token;
 
@@ -40,10 +42,9 @@ async function getBearer(env) {
   return data.token;
 }
 
-export async function proxy(upstreamPath, env, ctx, maxAgeSeconds = 30) {
+async function proxy(upstreamPath, env, ctx, maxAgeSeconds = 30) {
   const url = `${RTT_BASE}${upstreamPath}`;
 
-  // Short-lived edge cache (eases poor connectivity and the RTT rate limits).
   const cache = caches.default;
   const cacheKey = new Request(url, { method: "GET" });
   const hit = await cache.match(cacheKey);
@@ -92,6 +93,35 @@ export async function proxy(upstreamPath, env, ctx, maxAgeSeconds = 30) {
       "X-Cache": "MISS",
     },
   });
-  if (ctx && typeof ctx.waitUntil === "function") ctx.waitUntil(cache.put(cacheKey, resp.clone()));
+  ctx.waitUntil(cache.put(cacheKey, resp.clone()));
   return resp;
 }
+
+export default {
+  async fetch(request, env, ctx) {
+    const { pathname, searchParams } = new URL(request.url);
+    const parts = pathname.split("/").filter(Boolean);
+
+    if (request.method !== "GET") return json({ error: "Method not allowed." }, 405);
+
+    // GET /api/health
+    if (pathname === "/api/health") return json({ ok: true });
+
+    // GET /api/board/:crs
+    if (parts[0] === "api" && parts[1] === "board" && parts.length === 3) {
+      const crs = parts[2];
+      if (!isCrs(crs)) return json({ error: "Invalid station code." }, 400);
+      const code = encodeURIComponent(`gb-nr:${crs.toUpperCase()}`);
+      return proxy(`/rtt/location?code=${code}`, env, ctx, 30);
+    }
+
+    // GET /api/service?uid=<uniqueIdentity>
+    if (parts[0] === "api" && parts[1] === "service" && parts.length === 2) {
+      const uid = searchParams.get("uid") || "";
+      if (!isUid(uid)) return json({ error: "Invalid service identity." }, 400);
+      return proxy(`/rtt/service?uniqueIdentity=${encodeURIComponent(uid)}`, env, ctx, 30);
+    }
+
+    return json({ error: "Not found." }, 404);
+  },
+};

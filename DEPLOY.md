@@ -1,56 +1,58 @@
 # Deploying My Train
 
-This is a **single** Cloudflare Pages deployment. The app's API runs as a Pages
-Function inside the same site (`functions/api/*`), so there's no separate Worker
-to manage and nothing to wire together — you deploy the site, set one secret, done.
+This deploys as a **single Cloudflare Worker** that serves the static PWA *and*
+the RTT API together (Workers Static Assets). The static files in `public/` are
+served directly; anything under `/api/*` is handled by the Worker in
+`src/index.js`, which proxies Realtime Trains with your token kept server-side.
+So there's one thing to deploy, no separate API service, and no CORS to manage.
 
 You'll need:
 - A [Cloudflare account](https://dash.cloudflare.com/sign-up) (free).
 - A **Realtime Trains API token** — register at [api-portal.rtt.io](https://api-portal.rtt.io/)
   (requires an RTT unified login). You'll get **either** a long-life *access token*
-  **or** a *refresh token*; the app supports both.
+  **or** a *refresh token*; both are supported.
 
 > **Which API is this?** The next-generation RTT API at `https://data.rtt.io`
-> (spec v2), authenticated with a **Bearer token** kept server-side in the Pages
-> Function. It replaces the old `api.rtt.io` username/password API, which shuts
-> down **30 September 2026**.
+> (spec v2), authenticated with a **Bearer token**. It replaces the old
+> `api.rtt.io` username/password API, which shuts down **30 September 2026**.
 
 ---
 
-## Deploy (all in the Cloudflare dashboard)
+## Deploy (Cloudflare dashboard, connected to GitHub)
 
-1. **Workers & Pages → Create → Pages tab → Connect to Git.**
-2. Authorize GitHub if asked, then pick the **`ocoomber/what-train`** repo.
-3. Production branch: **`main`**.
-4. Build settings:
-   - **Framework preset:** None
-   - **Build command:** *(leave blank)*
-   - **Build output directory:** `public`
-5. Click **Save and Deploy**. Wait for the build to finish — you'll get a
-   `https://<name>.pages.dev` URL.
-6. Add your RTT token: open the new Pages project → **Settings → Variables and
-   Secrets** (under "Environment variables") → **Add**:
+1. **Workers & Pages → Create → Workers → Import a repository** (connect GitHub
+   if asked) and pick **`ocoomber/what-train`**.
+2. On the "Set up your application" screen:
+   - **Project name:** `what-train`
+   - **Build command:** leave blank
+   - **Deploy command:** `npx wrangler deploy` (the default — leave it)
+3. Click **Deploy** and wait for the build to finish. You'll get a
+   `https://what-train.<your-subdomain>.workers.dev` URL.
+4. Add your RTT token: open the Worker → **Settings → Variables and Secrets** →
+   **Add**:
    - **Type:** Secret (encrypted)
    - **Name:** `RTT_ACCESS_TOKEN` (if RTT gave you an access token) **or**
      `RTT_REFRESH_TOKEN` (if a refresh token)
    - **Value:** paste your token → **Save**.
-7. **Redeploy so the secret takes effect:** Pages project → **Deployments** →
-   on the latest deployment, **⋯ → Retry deployment** (a secret added after the
-   first build isn't live until you redeploy).
+5. **Redeploy so the secret takes effect:** on the Worker, open **Deployments**
+   (or **View build history**) and re-run the latest deployment. A secret added
+   after the first build isn't live until you redeploy.
 
 ### Check it worked
 
-- Open `https://<name>.pages.dev/api/health` → should show `{"ok":true}`.
-- Open `https://<name>.pages.dev/api/board/CLJ` → should show JSON with a
+- `https://what-train.<your-subdomain>.workers.dev/api/health` → `{"ok":true}`
+  (confirms the Worker deployed).
+- `https://what-train.<your-subdomain>.workers.dev/api/board/CLJ` → JSON with a
   `services` array (this is the call that uses your token). If you instead see
   `{"error":"Missing RTT_ACCESS_TOKEN..."}`, the secret isn't set or you haven't
-  redeployed since adding it (step 7).
+  redeployed since adding it (step 5).
+- The main URL (no `/api/...`) should load the app.
 
 ---
 
 ## Install on Android
 
-1. Open the `https://<name>.pages.dev` URL in Chrome.
+1. Open the `…workers.dev` URL in Chrome.
 2. Chrome menu → **Add to Home screen**.
 3. Launch from the icon — it opens full-screen and asks for **location**
    permission. Allow it ("while using" is fine). That's the only tap needed.
@@ -60,8 +62,9 @@ You'll need:
 ## Local development (optional, needs a terminal)
 
 ```bash
+npm install
 cp .dev.vars.example .dev.vars   # then fill in your RTT token (access OR refresh)
-npx wrangler pages dev public    # serves the site + functions at http://localhost:8788
+npx wrangler dev                 # serves the site + API at http://localhost:8787
 ```
 
 `.dev.vars` is read automatically and is gitignored. To exercise the three

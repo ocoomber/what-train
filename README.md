@@ -24,15 +24,16 @@ The app reads your GPS speed and heading and resolves into one of three states:
 - **`public/`** — a vanilla-JS PWA (no frameworks): app shell + service worker
   for offline launch, a bundled UK station-coordinate dataset (`stations.json`),
   and the geolocation state machine in `app.js`.
-- **`functions/api/`** — Cloudflare Pages Functions that proxy the
+- **`src/index.js`** — the Cloudflare Worker. It serves the `public/` static
+  files (Workers Static Assets) and handles `/api/*` by proxying the
   next-generation [Realtime Trains API](https://api-portal.rtt.io/)
   (`data.rtt.io`, spec v2), keeping the bearer token server-side (RTT's terms
   require this). Supports either a long-life access token or a refresh token
-  (exchanged for short-life access tokens automatically). Because the API lives
-  at `/api/*` on the same site, there's no separate Worker and no CORS to manage.
+  (exchanged for short-life access tokens automatically). Because the API and
+  site share one origin, there's no separate service and no CORS to manage.
 
-It deploys as a single Cloudflare Pages project with no build step. See
-**[DEPLOY.md](DEPLOY.md)** for setup and deployment.
+It deploys as a single Cloudflare Worker (`npx wrangler deploy`) with no build
+step. See **[DEPLOY.md](DEPLOY.md)** for setup and deployment.
 
 ## Design
 

@@ -1,0 +1,12 @@
+{
+  // Worker that serves the static PWA (from ./public) AND the RTT API proxy
+  // (anything under /api/*). Deploy with: npx wrangler deploy
+  "name": "what-train",
+  "main": "src/index.js",
+  "compatibility_date": "2025-01-01",
+  "assets": {
+    // Static files in ./public are served first; requests that don't match a
+    // file (e.g. /api/*) fall through to the Worker in src/index.js.
+    "directory": "./public"
+  }
+}
