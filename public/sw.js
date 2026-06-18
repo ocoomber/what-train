@@ -33,8 +33,10 @@ self.addEventListener("fetch", (e) => {
   if (req.method !== "GET") return;
 
   const url = new URL(req.url);
-  // Only manage our own origin's shell; let API (cross-origin) go straight to network.
+  // Only manage our own origin's shell; let other origins go straight to network.
   if (url.origin !== self.location.origin) return;
+  // Never cache the live API (same-origin Pages Functions at /api/*).
+  if (url.pathname.startsWith("/api/")) return;
 
   // Cache-first for the shell, with a background refresh.
   e.respondWith(

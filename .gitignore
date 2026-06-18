@@ -1,7 +1,6 @@
 # Cloudflare / Wrangler
-worker/.dev.vars
+.dev.vars
 .wrangler/
-worker/.wrangler/
 
 # Node
 node_modules/

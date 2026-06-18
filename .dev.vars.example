@@ -1,0 +1,13 @@
+# Local dev only. Copy to `.dev.vars` (gitignored) and fill in ONE token option.
+# In production these are set on the Cloudflare Pages project (Settings →
+# Variables and Secrets), not from this file.
+# Used by: npx wrangler pages dev public
+#
+# If you were issued a long-life access token:
+RTT_ACCESS_TOKEN=your-long-life-access-token
+#
+# If you were issued a refresh token instead (leave RTT_ACCESS_TOKEN blank):
+# RTT_REFRESH_TOKEN=your-refresh-token
+#
+# Optional: pin the API version (ISO date). Leave unset to always use the latest.
+# RTT_API_VERSION=2026-04-09
