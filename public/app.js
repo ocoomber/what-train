@@ -40,7 +40,10 @@ let candidateIdx = 0;
 let locked = null;           // {uid, op, auto}
 let refreshTimer = null;
 let geoWatchId = null;
-let lastSvc = null;          // last rendered service (for the QR screen's back button)
+let lastSvc = null;          // last rendered service (QR back / signal-drop fallback)
+let lastLoadedAt = 0;        // when fresh service data last arrived
+let staleMsg = "";           // set when a refresh failed but we kept the old data
+let pinnedStation = null;    // {crs, pos} when the user manually picked a nearby station
 
 const $screen = document.getElementById("screen");
 const $statusText = document.getElementById("status-text");
@@ -227,9 +230,31 @@ function evaluate() {
   // offer the nearest station's live departures as tappable candidates.
   const near = nearestStation(lastFix);
   if (!near) { showLocated(); return; }
+  // Respect a manually chosen nearby station until the user moves away.
+  if (pinnedStation && distanceM(lastFix, pinnedStation.pos) < 500) return;
+  pinnedStation = null;
   if (current !== State.STATION || discovery.stationCrs !== near.station.c) {
     enterStation(near.station, near.distance);
   }
+}
+
+function nearestStations(pos, count) {
+  return stations
+    .map((s) => ({ station: s, distance: distanceM(pos, s) }))
+    .sort((a, b) => a.distance - b.distance)
+    .slice(0, count || 6);
+}
+
+// One tap to try the next-nearest station's board (for when you're stopped
+// between stations and your train isn't on the closest board).
+function switchNearbyStation() {
+  if (!lastFix) return;
+  const list = nearestStations(lastFix, 6);
+  if (!list.length) return;
+  const idx = list.findIndex((x) => x.station.c === discovery.stationCrs);
+  const nx = list[(idx + 1) % list.length];
+  pinnedStation = { crs: nx.station.c, pos: lastFix };
+  enterStation(nx.station, nx.distance);
 }
 
 // Rare fallback: we have a fix but no station data to list (e.g. dataset failed).
@@ -269,9 +294,13 @@ function renderStation(station, services, distance) {
     : `<div class="notice"><div class="big">No trains listed right now</div><div class="sub">Try Reload — it may just be a quiet moment.</div></div>`;
   $screen.innerHTML =
     `<div class="screen-title">${heading}</div>${cards}` +
-    refreshButton("Reload", "reload-board");
+    `<div class="btn-row" style="margin-top:6px">
+       <button class="btn" id="reload-board">↻ RELOAD</button>
+       <button class="btn" id="nearby">NEARBY STATION →</button>
+     </div>`;
   bindCards();
   document.getElementById("reload-board").onclick = () => enterStation(station, distance);
+  document.getElementById("nearby").onclick = switchNearbyStation;
 }
 
 function departureCard(s) {
@@ -300,6 +329,7 @@ function departureCard(s) {
 // ---------- STATE 2: moving, unidentified ----------
 async function enterMoving() {
   current = State.MOVING;
+  pinnedStation = null;
   candidates = []; candidateIdx = 0;
   setStatus("ON A TRAIN", "ok");
   renderNotice("ON THE MOVE", "Working out which train you're on…", true);
@@ -384,9 +414,13 @@ function renderFallbackList(station, services) {
     || `<div class="notice"><div class="big">No departures found</div></div>`;
   $screen.innerHTML =
     `<div class="screen-title">Tap the train you're on (${esc(station.c)})</div>${cards}` +
-    refreshButton("Re-scan", "rescan");
+    `<div class="btn-row" style="margin-top:6px">
+       <button class="btn" id="rescan">↻ RE-SCAN</button>
+       <button class="btn" id="nearby">NEARBY STATION →</button>
+     </div>`;
   bindCards();
   document.getElementById("rescan").onclick = enterMoving;
+  document.getElementById("nearby").onclick = switchNearbyStation;
 }
 
 // ---------- STATE 3: confirmed ----------
@@ -403,6 +437,7 @@ function lockOnto(uid, op, auto) {
   current = State.CONFIRMED;
   setStatus("TRAIN LOCKED", "ok");
   stopGeo();              // no need to track location once we know the train
+  lastSvc = null; lastLoadedAt = 0; staleMsg = "";   // fresh train, no stale fallback
   loadService();
   startAutoRefresh();
 }
@@ -424,12 +459,23 @@ function startAutoRefresh() {
 }
 async function loadService(silent) {
   if (!locked) return;
-  if (!silent) renderNotice("LOADING TRAIN", "Fetching live progress…", true);
+  if (!silent && !lastSvc) renderNotice("LOADING TRAIN", "Fetching live progress…", true);
   try {
     const data = await api(`/api/service?uid=${encodeURIComponent(locked.uid)}`);
-    renderTrain(data.service || data);
+    const svc = data.service || data;
+    if (!svc || !svc.locations) throw new Error("No data");
+    lastLoadedAt = Date.now();
+    staleMsg = "";
+    renderTrain(svc);
   } catch (e) {
-    if (!silent) renderNotice("CAN'T LOAD TRAIN", e.message, false, true, true);
+    if (lastSvc) {
+      // Poor signal: keep showing the last good timetable rather than blanking it.
+      staleMsg = (typeof navigator !== "undefined" && navigator.onLine === false)
+        ? "Offline — showing last update" : "Couldn't refresh — showing last update";
+      renderTrain(lastSvc);
+    } else if (!silent) {
+      renderNotice("CAN'T LOAD TRAIN", e.message, false, true, true);
+    }
   }
 }
 
@@ -493,18 +539,39 @@ function renderTrain(svc) {
 
   html += `<div class="train-status">${posLine}</div>`;
 
+  // "Your stop" banner (if the user has tapped a stop to track).
+  const myCrs = locked.myStopCrs;
+  if (myCrs) {
+    const mi = stops.findIndex((s) => stopCrs(s) === myCrs);
+    if (mi >= 0) {
+      const myStop = stops[mi];
+      const myEta = bestTime((myStop.temporalData && (myStop.temporalData.arrival || myStop.temporalData.departure)) || null);
+      if (arrived || mi < nextIdx) {
+        html += `<div class="yourstop done">Passed your stop (${esc(locName(myStop))}) · tap to clear</div>`;
+      } else if (mi === nextIdx) {
+        html += `<div class="yourstop now">GET OFF NEXT — ${esc(locName(myStop))} · ${etaText(myEta)}</div>`;
+      } else {
+        html += `<div class="yourstop">YOUR STOP — ${esc(locName(myStop))} · ${etaText(myEta)} (${fmtClock(myEta)})</div>`;
+      }
+    }
+  } else if (!arrived) {
+    html += `<div class="hint-tap">Tap a stop below to track when to get off.</div>`;
+  }
+
   if (!arrived) {
     if (nextIdx === finalIdx) {
-      html += stopBlock("FINAL DESTINATION", final, true);
+      html += stopBlock("FINAL DESTINATION", final, true, myCrs);
     } else {
-      html += stopBlock("NEXT STOP", next);
+      html += stopBlock("NEXT STOP", next, false, myCrs);
       html += `<div class="screen-title" style="margin-top:6px">Then calling at</div>`;
-      for (let i = nextIdx + 1; i <= finalIdx; i++) html += stopRow(stops[i], i === finalIdx);
+      for (let i = nextIdx + 1; i <= finalIdx; i++) html += stopRow(stops[i], i === finalIdx, myCrs);
     }
   }
 
   html += `<button class="btn btn-wide refresh-btn" id="refresh-now">↻ REFRESH</button>`;
-  html += `<div class="updated-note">Updated ${fmtClock(new Date())} · auto-refresh 60s</div>`;
+  const ago = lastLoadedAt ? Math.round((Date.now() - lastLoadedAt) / 60000) : 0;
+  const agoTxt = !lastLoadedAt ? "now" : (ago <= 0 ? "just now" : `${ago} min ago`);
+  html += `<div class="updated-note${staleMsg ? " warn" : ""}">${staleMsg ? esc(staleMsg) + " · " : "Updated "}${staleMsg ? "" : agoTxt + " · "}auto-refresh 60s</div>`;
   html += `<div class="btn-row" style="margin-top:8px">
       <button class="btn" id="share">🔗 SHARE</button>
       <button class="btn" id="qr">▦ QR</button>
@@ -518,6 +585,23 @@ function renderTrain(svc) {
   if (sh) sh.onclick = shareTrain;
   const qr = document.getElementById("qr");
   if (qr) qr.onclick = renderQR;
+  // Tap a stop to mark it as "my stop" (tap again to clear).
+  $screen.querySelectorAll("[data-crs]").forEach((el) => {
+    el.onclick = () => setMyStop(el.getAttribute("data-crs"));
+  });
+  const ys = $screen.querySelector(".yourstop");
+  if (ys) ys.onclick = () => setMyStop(locked.myStopCrs);
+}
+
+function stopCrs(stop) {
+  return (stop.location && stop.location.shortCodes && stop.location.shortCodes[0]) || "";
+}
+
+function setMyStop(crs) {
+  if (!locked) return;
+  locked.myStopCrs = (locked.myStopCrs === crs) ? undefined : crs; // toggle
+  try { sessionStorage.setItem("mytrain.locked", JSON.stringify(locked)); } catch (_) {}
+  if (lastSvc) renderTrain(lastSvc);
 }
 
 // Render a scannable QR of the deep link, so someone can point a camera at your
@@ -552,15 +636,17 @@ function locName(stop) {
   return (stop.location && (stop.location.description || (stop.location.shortCodes && stop.location.shortCodes[0]))) || "—";
 }
 
-function stopBlock(label, stop, isFinal) {
+function stopBlock(label, stop, isFinal, myCrs) {
   const td = stop.temporalData || {};
   const tdArr = td.arrival || td.departure;       // intermediate/destination use arrival; origin uses departure
   const arr = bestTime(tdArr);
   const booked = bookedTime(tdArr);
   const plat = platformOf(stop.locationMetadata);
   const showBooked = booked && arr && Math.abs(booked - arr) >= 60000;
-  return `<div class="stop${isFinal ? " final" : ""}">
-    <div class="stop-label">${label}</div>
+  const crs = stopCrs(stop);
+  const mine = crs && crs === myCrs ? " mine" : "";
+  return `<div class="stop${isFinal ? " final" : ""}${mine}" data-crs="${esc(crs)}">
+    <div class="stop-label">${label}${mine ? " · YOUR STOP" : ""}</div>
     <div class="stop-name">${esc(locName(stop))}</div>
     <div class="stop-bottom">
       <span class="stop-eta">${etaText(arr)}</span>
@@ -571,14 +657,16 @@ function stopBlock(label, stop, isFinal) {
 }
 
 // Compact one-line row for each remaining calling point in the full timetable.
-function stopRow(stop, isFinal) {
+function stopRow(stop, isFinal, myCrs) {
   const td = stop.temporalData || {};
   const tdArr = td.arrival || td.departure;
   const arr = bestTime(tdArr);
   const late = latenessMin(tdArr);
   const plat = platformOf(stop.locationMetadata);
-  return `<div class="stoprow${isFinal ? " final" : ""}">
-    <span class="sr-name">${esc(locName(stop))}${isFinal ? ` <span class="sr-dest">DEST</span>` : ""}</span>
+  const crs = stopCrs(stop);
+  const mine = crs && crs === myCrs ? " mine" : "";
+  return `<div class="stoprow${isFinal ? " final" : ""}${mine}" data-crs="${esc(crs)}">
+    <span class="sr-name">${esc(locName(stop))}${isFinal ? ` <span class="sr-dest">DEST</span>` : ""}${mine ? ` <span class="sr-dest">YOUR STOP</span>` : ""}</span>
     <span class="sr-right">
       <span class="sr-eta">${etaText(arr)}</span>
       <span class="sr-time">${fmtClock(arr)}${late >= 2 ? ` <span class="badge-late">+${late}</span>` : ""}${plat ? ` · P${esc(plat)}` : ""}</span>
@@ -594,7 +682,8 @@ function forgetTrain() {
   current = State.ACQUIRING;
   lastFix = null;
   fixHistory = [];
-  lastSvc = null;
+  lastSvc = null; lastLoadedAt = 0; staleMsg = "";
+  pinnedStation = null;
   setStatus("LOCATING", "");
   renderNotice("FINDING YOU", "Re-checking your location…", true);
   startGeo();   // resume GPS to pick the next train
