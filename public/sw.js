@@ -1,7 +1,7 @@
 /* My Train service worker — caches the app shell for offline launch.
  * Live API requests (/api/*) and other origins always go to the network. */
 
-const CACHE = "mytrain-shell-v7";
+const CACHE = "mytrain-shell-v8";
 const SHELL = [
   "./",
   "./styles.css",
