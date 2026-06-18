@@ -140,8 +140,10 @@ function destInfo(svc) {
 
 // ---------- RTT API ----------
 async function api(path) {
-  if (!API_BASE || API_BASE.includes("example.workers.dev")) {
-    throw new Error("API not configured. Set API_BASE in config.js to your Worker URL.");
+  // API_BASE is empty for same-origin (Pages Functions). Only the leftover
+  // placeholder from an external-Worker setup is treated as "not configured".
+  if (API_BASE.includes("example.workers.dev")) {
+    throw new Error("API not configured. Set API_BASE in config.js.");
   }
   const res = await fetch(`${API_BASE}${path}`, { headers: { Accept: "application/json" } });
   if (!res.ok) {
