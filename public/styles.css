@@ -214,6 +214,24 @@ body {
 .sr-eta { font-size: 18px; font-weight: 700; }
 .sr-time { display: block; font-size: 13px; color: var(--fg-dim); }
 
+.yourstop {
+  background: var(--fg);
+  color: #1a1500;
+  font-weight: 700;
+  font-size: 18px;
+  border-radius: 12px;
+  padding: 14px 16px;
+  margin: 0 0 14px;
+  cursor: pointer;
+}
+.yourstop.now { background: var(--red); color: #fff; }
+.yourstop.done { background: var(--panel); color: var(--fg-dim); font-weight: 400; font-size: 15px; border: 1px solid var(--panel-edge); }
+.hint-tap { font-size: 13px; color: var(--fg-dim); margin: 0 0 12px; }
+
+.stop.mine, .stoprow.mine { outline: 2px solid var(--fg); outline-offset: -2px; border-radius: 12px; }
+
+.updated-note.warn { color: var(--amber); }
+
 .qr-box {
   background: #fff;
   padding: 14px;
