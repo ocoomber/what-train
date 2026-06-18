@@ -1,0 +1,11 @@
+name = "my-train-api"
+main = "src/index.js"
+compatibility_date = "2025-01-01"
+
+# RTT credentials are stored as secrets, not here:
+#   wrangler secret put RTT_USERNAME
+#   wrangler secret put RTT_PASSWORD
+# For local dev, copy .dev.vars.example to .dev.vars and fill it in.
+
+[observability]
+enabled = true

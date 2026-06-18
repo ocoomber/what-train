@@ -1,0 +1,4 @@
+# Local dev only. Copy to `.dev.vars` (gitignored) and fill in your RTT login.
+# In production these are set as Worker secrets, not from this file.
+RTT_USERNAME=your-rtt-username
+RTT_PASSWORD=your-rtt-password
