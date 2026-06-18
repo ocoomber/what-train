@@ -2,19 +2,27 @@
 
 Two pieces deploy independently, both on Cloudflare's free tier:
 
-1. **Worker** (`worker/`) — proxies the Realtime Trains API and hides your credentials.
+1. **Worker** (`worker/`) — proxies the Realtime Trains API and hides your token.
 2. **PWA** (`public/`) — the static front-end, served by Cloudflare Pages.
 
 You'll need:
 - A [Cloudflare account](https://dash.cloudflare.com/sign-up) (free).
-- A [Realtime Trains API](https://api.rtt.io/) account — sign up, then your login
-  username/password are your API credentials (HTTP Basic Auth).
+- A **Realtime Trains API token** — register at the next-generation portal
+  [api-portal.rtt.io](https://api-portal.rtt.io/) (requires an RTT unified login).
+  You'll be issued **either** a long-life *access token* **or** a *refresh token*;
+  the Worker supports both (see below).
 - Node.js 18+ locally (for `wrangler`).
 
-> **Note:** This targets the legacy RTT *Pull* API at `api.rtt.io`, which is what the
-> username/password login is for. RTT has announced this endpoint will retire around
-> September 2026; if you're reading this later, you may need to migrate to their newer
-> API portal and update the base URL / auth in `worker/src/index.js`.
+> **Which API is this?** This targets the next-generation RTT API at
+> `https://data.rtt.io` (spec v2), authenticated with a **Bearer token**. It
+> replaces the old `api.rtt.io` username/password API, which is being shut down
+> on **30 September 2026**. RTT's terms require the token to stay server-side —
+> which is exactly why this app routes every call through the Worker and never
+> ships the token to the browser.
+
+> **Rate limits (free tier):** 30/min, 750/hour, 9,000/day, 30,000/week. The app
+> only calls the API on user action and on the 60-second refresh while a train is
+> locked, and the Worker caches responses for 30s, so this is ample for personal use.
 
 ---
 
@@ -26,9 +34,15 @@ cd worker
 # Log in to Cloudflare (opens a browser once)
 npx wrangler login
 
-# Store your RTT credentials as encrypted secrets (you'll be prompted to paste each)
-npx wrangler secret put RTT_USERNAME
-npx wrangler secret put RTT_PASSWORD
+# Store your RTT token as an encrypted secret. Set ONE of these:
+#  - If you were issued a long-life access token:
+npx wrangler secret put RTT_ACCESS_TOKEN
+#  - If you were issued a refresh token instead (the Worker will exchange it for
+#    short-life access tokens automatically and cache them):
+# npx wrangler secret put RTT_REFRESH_TOKEN
+
+# (Optional) pin the API version so the response shape can't shift under you:
+# npx wrangler secret put RTT_API_VERSION     # e.g. 2026-04-09
 
 # Ship it
 npx wrangler deploy
@@ -49,15 +63,15 @@ https://my-train-api.<your-subdomain>.workers.dev
 curl https://my-train-api.<your-subdomain>.workers.dev/health
 # -> {"ok":true}
 
-# Live departures for London Paddington
-curl https://my-train-api.<your-subdomain>.workers.dev/api/board/PAD
-# -> JSON board with a "services" array
+# Live line-up for Clapham Junction
+curl https://my-train-api.<your-subdomain>.workers.dev/api/board/CLJ
+# -> JSON with a "services" array
 
-# Service detail — take a serviceUid + runDate from the board above
-curl https://my-train-api.<your-subdomain>.workers.dev/api/service/W12345/2026/06/18
+# Service detail — take a uniqueIdentity from the board above (the data-uid value)
+curl "https://my-train-api.<your-subdomain>.workers.dev/api/service?uid=gb-nr:L01525:2026-06-18"
 ```
 
-If the board returns real services, the proxy and your credentials are working.
+If the board returns real services, the proxy and your token are working.
 
 ---
 
@@ -93,8 +107,8 @@ add it to your home screen.
 3. Build settings: **Build command:** *(leave empty)* · **Build output directory:** `public`.
 4. Deploy. Every push to the branch redeploys.
 
-> Whichever option you use, remember `public/config.js` must already contain your
-> Worker URL before deploying (Option B builds straight from the repo).
+> Whichever option you use, `public/config.js` must already contain your Worker
+> URL before deploying (Option B builds straight from the repo).
 
 ---
 
@@ -107,29 +121,12 @@ add it to your home screen.
 
 ---
 
-## Updating the station data (optional)
-
-Station coordinates are bundled in `public/stations.json` (CRS + name + lat/long,
-derived from the public [UK-Train-Station-Locations](https://github.com/ellcom/UK-Train-Station-Locations)
-dataset). To refresh it, re-download that dataset and re-run the small transform used
-to build it (see the commit that added `stations.json`).
-
-## Regenerating icons (optional)
-
-PNG icons are pre-generated and committed. To rebuild them from the brand colours:
-
-```bash
-node tools/gen-icons.js   # writes public/icons/icon-192.png and icon-512.png
-```
-
----
-
 ## Local development
 
 ```bash
 # Worker
 cd worker
-cp .dev.vars.example .dev.vars   # then fill in your real RTT username/password
+cp .dev.vars.example .dev.vars   # then fill in your RTT token (access OR refresh)
 npx wrangler dev                 # http://localhost:8787
 
 # Front-end (separate terminal) — set API_BASE to http://localhost:8787 in config.js first
@@ -142,3 +139,20 @@ To exercise the three states without being on a train, open Chrome DevTools →
 - A station's lat/long at ~0 mph → **State 1** (departure cards).
 - A mid-route point at 60 mph → **State 2** (best-guess card → fallback list).
 - Tap a train → **State 3** (next / then / final ETAs, 60-second auto-refresh).
+
+---
+
+## Updating the station data (optional)
+
+Station coordinates are bundled in `public/stations.json` (CRS + name + lat/long,
+derived from the public [UK-Train-Station-Locations](https://github.com/ellcom/UK-Train-Station-Locations)
+dataset). Refresh it by re-downloading that dataset and re-running the transform used
+to build it (see the commit that added `stations.json`).
+
+## Regenerating icons (optional)
+
+PNG icons are pre-generated and committed. To rebuild them from the brand colours:
+
+```bash
+node tools/gen-icons.js   # writes public/icons/icon-192.png and icon-512.png
+```
