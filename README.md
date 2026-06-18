@@ -7,17 +7,17 @@ shows a keyboard.
 
 ## How it works
 
-The app reads your GPS speed and heading and resolves into one of three states:
+The app fires GPS on open and helps you pick your train, then tracks it:
 
-1. **At a station** (stopped, within ~300 m of a known station) — shows live
-   departures as big tappable cards. Tap the one you're boarding.
-2. **On a moving train** (30 mph+) — guesses which train you're on from the
-   nearest station's board, filtered by your direction of travel, and asks
-   *"Are you on this train?"* with **YES** / **NOT THIS ONE**. If it can't guess
-   confidently, it falls back to a tappable list of nearby departures.
-3. **Train confirmed** — locks onto that specific service and shows the next
-   stop, the stop after, and the final destination with live ETAs and delay
-   status, auto-refreshing every 60 seconds.
+1. **Pick your train** — works standing still (on a platform or a stopped train)
+   or moving. It shows the nearest station's live departures as big tappable
+   cards; tap the train you're on. If you're moving fast with a clear direction,
+   it leads with a best-guess *"Are you on this train?"* card (**YES** / **NOT
+   THIS ONE**), with the full list always one tap away.
+2. **Tracking your train** — once you tap a train it locks onto that exact
+   service and shows the next stop, the stop after, and the final destination
+   with live ETAs and delay status, auto-refreshing every 60 seconds. It stays
+   on that train until you tap **Show me a different train**.
 
 ## Architecture
 
