@@ -572,17 +572,12 @@ function renderTrain(svc) {
   const ago = lastLoadedAt ? Math.round((Date.now() - lastLoadedAt) / 60000) : 0;
   const agoTxt = !lastLoadedAt ? "now" : (ago <= 0 ? "just now" : `${ago} min ago`);
   html += `<div class="updated-note${staleMsg ? " warn" : ""}">${staleMsg ? esc(staleMsg) + " · " : "Updated "}${staleMsg ? "" : agoTxt + " · "}auto-refresh 60s</div>`;
-  html += `<div class="btn-row" style="margin-top:8px">
-      <button class="btn" id="share">🔗 SHARE</button>
-      <button class="btn" id="qr">▦ QR</button>
-    </div>`;
+  html += `<button class="btn btn-wide" id="qr" style="margin-top:8px">▦ SHARE / QR</button>`;
   html += `<button class="btn btn-wide" id="forget" style="margin-top:10px">DIFFERENT TRAIN</button>`;
 
   $screen.innerHTML = html;
   document.getElementById("refresh-now").onclick = () => loadService(false);
   document.getElementById("forget").onclick = forgetTrain;
-  const sh = document.getElementById("share");
-  if (sh) sh.onclick = shareTrain;
   const qr = document.getElementById("qr");
   if (qr) qr.onclick = renderQR;
   // Tap a stop to mark it as "my stop" (tap again to clear).
