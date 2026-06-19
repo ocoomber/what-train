@@ -40,6 +40,18 @@ body {
   color: var(--fg-dim);
   border-bottom: 1px solid var(--panel-edge);
 }
+.back-btn {
+  display: none;
+  background: none;
+  border: none;
+  color: var(--fg);
+  font: inherit;
+  font-size: 22px;
+  line-height: 1;
+  padding: 2px 8px 2px 0;
+  margin: -2px 0 -2px -4px;
+  cursor: pointer;
+}
 .dot {
   width: 12px; height: 12px; border-radius: 50%;
   background: var(--amber);

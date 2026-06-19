@@ -50,6 +50,35 @@ const $screen = document.getElementById("screen");
 const $statusText = document.getElementById("status-text");
 const $statusDot = document.getElementById("status-dot");
 const $speed = document.getElementById("speed-readout");
+const $backBtn = document.getElementById("back-btn");
+
+// ---------- in-app back navigation ----------
+// A standalone/full-screen PWA has no browser chrome back arrow, and the
+// phone's hardware/gesture back closes the app outright once there's no
+// more history to pop. So every "drill into a sub-screen" tap pushes a
+// closure that redraws where you came from, and a real history entry to
+// match — letting both the on-screen button and the phone's back button
+// step back through the app instead of exiting it.
+let navStack = [];
+function pushNav(renderPrev) {
+  navStack.push(renderPrev);
+  try { history.pushState({ navDepth: navStack.length }, ""); } catch (_) {}
+  updateBackButton();
+}
+function clearNav() {
+  navStack = [];
+  updateBackButton();
+}
+function updateBackButton() {
+  if ($backBtn) $backBtn.style.display = navStack.length ? "inline-block" : "none";
+}
+if ($backBtn) $backBtn.onclick = () => { if (navStack.length) history.back(); };
+window.addEventListener("popstate", () => {
+  if (!navStack.length) return;
+  const renderPrev = navStack.pop();
+  updateBackButton();
+  renderPrev();
+});
 
 // ---------- geo helpers ----------
 const toRad = (d) => (d * Math.PI) / 180;
@@ -293,9 +322,7 @@ function renderNearbyStations() {
   const rows = list.length
     ? list.map(nearbyStationRow).join("")
     : `<div class="notice"><div class="big">No stations found nearby</div></div>`;
-  $screen.innerHTML =
-    `<div class="screen-title">Nearby stations — tap one</div>${rows}` +
-    `<button class="link-btn" id="nb-back">← Back</button>`;
+  $screen.innerHTML = `<div class="screen-title">Nearby stations — tap one</div>${rows}`;
   $screen.querySelectorAll("[data-crs]").forEach((el) => {
     el.onclick = () => {
       const picked = list.find((x) => x.station.c === el.dataset.crs);
@@ -304,7 +331,6 @@ function renderNearbyStations() {
       enterStation(picked.station, picked.distance);
     };
   });
-  document.getElementById("nb-back").onclick = evaluate;
 }
 
 // A saved shortlist of trains the user starred earlier — for quickly hopping
@@ -319,12 +345,11 @@ function pinnedRow(p) {
     <div class="card-meta"><span class="op-name">${esc(p.op)}</span></div>
   </button>`;
 }
-function renderPinned(returnTo) {
+function renderPinned() {
   const rows = pinnedTrains.length
     ? pinnedTrains.map(pinnedRow).join("")
     : `<div class="notice"><div class="big">No pinned trains</div><div class="sub">Tap ☆ on any train to save it here for quick access.</div></div>`;
-  $screen.innerHTML = `<div class="screen-title">⭐ Pinned trains</div>${rows}` +
-    `<button class="link-btn" id="pinned-back">← Back</button>`;
+  $screen.innerHTML = `<div class="screen-title">⭐ Pinned trains</div>${rows}`;
   $screen.querySelectorAll(".card[data-uid]").forEach((el) => {
     el.onclick = () => lockOnto(el.dataset.uid, el.dataset.op);
   });
@@ -332,22 +357,23 @@ function renderPinned(returnTo) {
     el.onclick = (e) => {
       e.stopPropagation();
       togglePin({ uid: el.dataset.pinRemove });
-      renderPinned(returnTo);
+      renderPinned();
     };
   });
-  document.getElementById("pinned-back").onclick = returnTo || (() => { if (lastSvc) renderTrain(lastSvc); else evaluate(); });
 }
 
 // Rare fallback: we have a fix but no station data to list (e.g. dataset failed).
 function showLocated() {
   if (current === State.IDLE) return;
   current = State.IDLE;
+  clearNav();
   setStatus("LOCATED", "ok");
   renderNotice("GOT YOUR LOCATION ✓", "Couldn't find any nearby stations to list. Tap to try again.", false, true);
 }
 
 // ---------- STATE 1: at a station ----------
 async function enterStation(station, distance) {
+  clearNav();
   current = State.STATION;
   discovery = { stationCrs: station.c, services: null };
   setStatus(station.c, "ok");
@@ -382,9 +408,9 @@ function renderStation(station, services, distance) {
     (pinnedTrains.length ? `<button class="link-btn" id="pinned-link">⭐ Pinned trains (${pinnedTrains.length})</button>` : "");
   bindCards();
   document.getElementById("reload-board").onclick = () => enterStation(station, distance);
-  document.getElementById("nearby").onclick = renderNearbyStations;
+  document.getElementById("nearby").onclick = () => { pushNav(() => renderStation(station, services, distance)); renderNearbyStations(); };
   const pl = document.getElementById("pinned-link");
-  if (pl) pl.onclick = () => renderPinned(() => renderStation(station, services, distance));
+  if (pl) pl.onclick = () => { pushNav(() => renderStation(station, services, distance)); renderPinned(); };
 }
 
 function departureCard(s) {
@@ -432,6 +458,7 @@ function bindPinStars() {
 
 // ---------- STATE 2: moving, unidentified ----------
 async function enterMoving() {
+  clearNav();
   current = State.MOVING;
   pinnedStation = null;
   candidates = []; candidateIdx = 0;
@@ -505,11 +532,13 @@ function renderGuess() {
     ${pinnedTrains.length ? `<button class="link-btn" id="g-pinned">⭐ Pinned trains (${pinnedTrains.length})</button>` : ""}`;
   document.getElementById("g-yes").onclick = () => lockOnto(uid, op);
   document.getElementById("g-no").onclick = nextCandidate;
-  document.getElementById("g-list").onclick = () =>
+  document.getElementById("g-list").onclick = () => {
+    pushNav(renderGuess);
     renderFallbackList({ c: discovery.stationCrs, n: discovery.stationCrs }, discovery.services);
-  document.getElementById("g-nearby").onclick = renderNearbyStations;
+  };
+  document.getElementById("g-nearby").onclick = () => { pushNav(renderGuess); renderNearbyStations(); };
   const gp = document.getElementById("g-pinned");
-  if (gp) gp.onclick = () => renderPinned(renderGuess);
+  if (gp) gp.onclick = () => { pushNav(renderGuess); renderPinned(); };
   bindPinStars();
 }
 
@@ -531,14 +560,15 @@ function renderFallbackList(station, services) {
     (pinnedTrains.length ? `<button class="link-btn" id="pinned-link">⭐ Pinned trains (${pinnedTrains.length})</button>` : "");
   bindCards();
   document.getElementById("rescan").onclick = enterMoving;
-  document.getElementById("nearby").onclick = renderNearbyStations;
+  document.getElementById("nearby").onclick = () => { pushNav(() => renderFallbackList(station, services)); renderNearbyStations(); };
   const pl = document.getElementById("pinned-link");
-  if (pl) pl.onclick = () => renderPinned(() => renderFallbackList(station, services));
+  if (pl) pl.onclick = () => { pushNav(() => renderFallbackList(station, services)); renderPinned(); };
 }
 
 // ---------- STATE 3: confirmed ----------
 function lockOnto(uid, op, auto) {
   if (!uid) return;
+  clearNav();
   locked = { uid, op: op || "", auto: !!auto };
   try { sessionStorage.setItem("mytrain.locked", JSON.stringify(locked)); } catch (_) {}
   // Make the URL a deep link to this exact train (shareable / bookmarkable / QR-able).
@@ -715,9 +745,9 @@ function renderTrain(svc) {
   document.getElementById("refresh-now").onclick = () => loadService(false);
   document.getElementById("forget").onclick = forgetTrain;
   const qr = document.getElementById("qr");
-  if (qr) qr.onclick = renderQR;
+  if (qr) qr.onclick = () => { pushNav(() => renderTrain(svc)); renderQR(); };
   const pl = document.getElementById("pinned-link");
-  if (pl) pl.onclick = () => renderPinned(() => renderTrain(svc));
+  if (pl) pl.onclick = () => { pushNav(() => renderTrain(svc)); renderPinned(); };
   // Tap a stop to mark it as "my stop" (tap again to clear).
   $screen.querySelectorAll("[data-crs]").forEach((el) => {
     el.onclick = () => setMyStop(el.getAttribute("data-crs"));
@@ -759,11 +789,9 @@ function renderQR() {
     ${svg ? `<div class="qr-box">${svg}</div>` : `<div class="sub">Couldn't draw a QR here — use Share instead.</div>`}
     <div class="sub">Point a phone camera at this to open the same live timetable.</div>
     <button class="btn btn-wide" id="qr-share">🔗 SHARE LINK</button>
-    <button class="btn btn-wide" id="qr-back" style="margin-top:10px">← BACK TO TRAIN</button>
   </div>`;
   const s = document.getElementById("qr-share");
   if (s) s.onclick = shareTrain;
-  document.getElementById("qr-back").onclick = () => { if (lastSvc) renderTrain(lastSvc); else loadService(false); };
 }
 
 function locName(stop) {
@@ -821,6 +849,7 @@ function stopRow(stop, isFinal, myCrs) {
 }
 
 function forgetTrain() {
+  clearNav();
   clearInterval(refreshTimer);
   locked = null;
   try { sessionStorage.removeItem("mytrain.locked"); } catch (_) {}
