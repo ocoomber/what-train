@@ -866,7 +866,7 @@ function renderTrain(svc) {
   // not just when the stop card scrolls into view, since the user needs to
   // know which part of the train to be in well in advance.
   const splitDests = (svc.destination || []).length > 1 ? svc.destination : null;
-  const formationIdx = formationChangeIdx(stops);
+  const formationIdx = formationChangeIdx(stops, nextIdx);
   if (!arrived && splitDests) {
     const where = formationIdx >= 0 ? ` at ${esc(locName(stops[formationIdx]))}` : "";
     const parts = splitDests.map((d) => `${esc(d.location && d.location.description)} (${fmtClock(bestTime(d.temporalData))})`).join(" and ");
@@ -975,10 +975,13 @@ function locName(stop) {
 // Each calling point can carry locationMetadata.numberOfVehicles (confirmed
 // against a live RTT board response) — the stop where that count changes is
 // where the train divides or joins, pinpointing the banner's general "ahead
-// somewhere" notice to one exact stop.
-function formationChangeIdx(stops) {
-  let prev = null;
-  for (let i = 0; i < stops.length; i++) {
+// somewhere" notice to one exact stop. Scans from `fromIdx` onward only —
+// an earlier vehicle-count change (e.g. portions joined before the user even
+// boarded) is history, not the upcoming split we're warning about.
+function formationChangeIdx(stops, fromIdx) {
+  const baseline = stops[fromIdx - 1] && stops[fromIdx - 1].locationMetadata;
+  let prev = baseline ? baseline.numberOfVehicles : null;
+  for (let i = fromIdx; i < stops.length; i++) {
     const n = stops[i].locationMetadata && stops[i].locationMetadata.numberOfVehicles;
     if (n == null) continue;
     if (prev != null && n !== prev) return i;
