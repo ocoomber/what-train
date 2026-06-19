@@ -1172,15 +1172,20 @@ async function boot() {
     renderNotice("GETTING GPS", "Allow location to find your train.", true, false, false, true);
   }
 
-  try {
-    const res = await fetch("stations.json");
-    stations = await res.json();
-    crsIndex = new Map(stations.map((s) => [s.c, { y: s.y, x: s.x }]));
-  } catch (_) {
-    if (current !== State.CONFIRMED && current !== State.IDLE) {
-      renderNotice("LOAD ERROR", "Couldn't load station data. Reload the app.", false, true);
-    }
-  }
+  // Fetch the station list in parallel with GPS acquisition below — on a slow
+  // connection this can take a while, and there's no reason to make the user
+  // wait on it before we even ask for a location fix.
+  fetch("stations.json")
+    .then((res) => res.json())
+    .then((list) => {
+      stations = list;
+      crsIndex = new Map(stations.map((s) => [s.c, { y: s.y, x: s.x }]));
+    })
+    .catch(() => {
+      if (current !== State.CONFIRMED && current !== State.IDLE) {
+        renderNotice("LOAD ERROR", "Couldn't load station data. Reload the app.", false, true);
+      }
+    });
 
   // If we opened straight into a locked train (deep link / saved), don't start GPS.
   if (current === State.CONFIRMED) return;
