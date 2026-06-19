@@ -1,12 +1,15 @@
 :root {
   --bg: #0a0d12;
-  --fg: #f5d020;
-  --fg-dim: #8a7a1c;
-  --panel: #11161f;
-  --panel-edge: #1d2530;
-  --green: #3ad07a;
-  --red: #ff5a5a;
-  --amber: #ffb020;
+  --panel: #121821;
+  --panel-edge: #20293a;
+  --fg: #e8edf2;
+  --fg-dim: #6b7686;
+  --accent: #ffc23d;
+  --green: #4fd08a;
+  --red: #ff6b6b;
+  --amber: #ffc23d;
+  --ui:  "Space Grotesk", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --num: "Space Mono", "SF Mono", "Roboto Mono", ui-monospace, Menlo, Consolas, monospace;
 }
 
 * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
@@ -16,7 +19,7 @@ html, body {
   height: 100%;
   background: var(--bg);
   color: var(--fg);
-  font-family: "SF Mono", "Roboto Mono", "DejaVu Sans Mono", Menlo, Consolas, monospace;
+  font-family: var(--ui);
   font-variant-numeric: tabular-nums;
   -webkit-user-select: none;
   user-select: none;
@@ -88,7 +91,7 @@ body {
 .guide-card {
   background: var(--panel);
   border: 1px solid var(--panel-edge);
-  border-radius: 12px;
+  border-radius: 20px;
   padding: 20px;
   max-width: 360px;
   max-height: 80vh;
@@ -100,7 +103,7 @@ body {
   flex: 0 0 auto;
   width: 22px; height: 22px;
   border-radius: 50%;
-  background: var(--fg);
+  background: var(--accent);
   color: var(--bg);
   font-size: 13px;
   font-weight: 700;
@@ -140,7 +143,7 @@ body {
 .spinner {
   width: 54px; height: 54px;
   border: 5px solid var(--panel-edge);
-  border-top-color: var(--fg);
+  border-top-color: var(--accent);
   border-radius: 50%;
   animation: spin 1s linear infinite;
 }
@@ -153,7 +156,7 @@ body {
   text-align: left;
   background: var(--panel);
   border: 1px solid var(--panel-edge);
-  border-radius: 14px;
+  border-radius: 20px;
   color: var(--fg);
   padding: 18px;
   margin-bottom: 14px;
@@ -183,7 +186,7 @@ body {
 }
 .pin-star.on { color: var(--amber); }
 .train-head .op .pin-star { font-size: 18px; margin-left: 8px; padding: 0; vertical-align: middle; }
-.card-time { font-size: 40px; font-weight: 700; line-height: 1; }
+.card-time { font-family: var(--num); font-size: 40px; font-weight: 700; line-height: 1; }
 .card-dest { font-size: 24px; line-height: 1.15; margin: 6px 0 0; word-break: break-word; }
 .card-meta {
   display: flex; justify-content: space-between; align-items: center;
@@ -204,7 +207,7 @@ body {
 .guess-card {
   background: var(--panel);
   border: 1px solid var(--panel-edge);
-  border-radius: 16px;
+  border-radius: 20px;
   padding: 22px;
 }
 .guess-card .card-time { font-size: 48px; }
@@ -220,14 +223,14 @@ body {
   font-weight: 700;
   letter-spacing: 1px;
   padding: 22px 14px;
-  border-radius: 16px;
+  border-radius: 14px;
   border: 2px solid var(--panel-edge);
   background: var(--panel);
   color: var(--fg);
   cursor: pointer;
 }
 .btn:active { transform: scale(0.98); }
-.btn-yes { background: var(--fg); color: #1a1500; border-color: var(--fg); }
+.btn-yes { background: var(--accent); color: #1a1500; border-color: var(--accent); }
 .btn-no { color: var(--fg-dim); }
 .btn-wide { width: 100%; }
 
@@ -241,7 +244,7 @@ body {
 .train-head .final { font-size: 16px; color: var(--fg-dim); text-align: right; }
 
 .delay-banner {
-  border-radius: 12px;
+  border-radius: 14px;
   padding: 14px 16px;
   margin: 6px 0 16px;
   font-size: 18px;
@@ -256,17 +259,27 @@ body {
 .stop {
   background: var(--panel);
   border: 1px solid var(--panel-edge);
-  border-radius: 14px;
-  padding: 18px;
+  border-radius: 20px;
+  padding: 22px;
   margin-bottom: 14px;
 }
-.stop.final { border-color: var(--fg); }
-.stop-label { font-size: 13px; letter-spacing: 2px; color: var(--fg-dim); text-transform: uppercase; }
-.stop-name { font-size: 30px; line-height: 1.1; margin: 6px 0; word-break: break-word; }
-.stop-bottom { display: flex; justify-content: space-between; align-items: baseline; margin-top: 8px; }
-.stop-eta { font-size: 22px; font-weight: 700; }
-.stop-time { font-size: 18px; color: var(--fg-dim); }
-.stop-plat { font-size: 15px; color: var(--fg-dim); }
+.stop.final { border-color: var(--accent); }
+.stop-label { font-size: 11px; letter-spacing: 3px; color: var(--fg-dim); text-transform: uppercase; }
+.stop-name { font-size: 34px; line-height: 1.05; margin: 8px 0 6px; color: #fff; word-break: break-word; }
+.stop-bottom { display: flex; justify-content: space-between; align-items: flex-end; margin-top: 14px; }
+.stop-eta { font-family: var(--num); font-size: 48px; font-weight: 700; line-height: 0.9; color: var(--accent); }
+.stop-time { font-family: var(--num); font-size: 14px; color: var(--fg-dim); text-align: right; }
+.stop-plat {
+  display: inline-block;
+  margin-top: 12px;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--fg);
+  background: var(--bg);
+  border: 1px solid var(--panel-edge);
+  border-radius: 8px;
+  padding: 5px 11px;
+}
 
 .train-status {
   font-size: 17px;
@@ -294,21 +307,21 @@ body {
 .sr-dest {
   font-size: 11px;
   color: var(--bg);
-  background: var(--fg);
+  background: var(--accent);
   border-radius: 4px;
   padding: 1px 5px;
   margin-left: 6px;
 }
 .sr-right { text-align: right; white-space: nowrap; }
-.sr-eta { font-size: 18px; font-weight: 700; }
-.sr-time { display: block; font-size: 13px; color: var(--fg-dim); }
+.sr-eta { font-family: var(--num); font-size: 17px; font-weight: 700; }
+.sr-time { display: block; font-family: var(--num); font-size: 12px; color: var(--fg-dim); }
 
 .yourstop {
-  background: var(--fg);
+  background: var(--accent);
   color: #1a1500;
   font-weight: 700;
   font-size: 18px;
-  border-radius: 12px;
+  border-radius: 16px;
   padding: 14px 16px;
   margin: 0 0 14px;
   cursor: pointer;
@@ -317,7 +330,7 @@ body {
 .yourstop.done { background: var(--panel); color: var(--fg-dim); font-weight: 400; font-size: 15px; border: 1px solid var(--panel-edge); }
 .hint-tap { font-size: 13px; color: var(--fg-dim); margin: 0 0 12px; }
 
-.stop.mine, .stoprow.mine { outline: 2px solid var(--fg); outline-offset: -2px; border-radius: 12px; }
+.stop.mine, .stoprow.mine { outline: 2px solid var(--accent); outline-offset: -2px; border-radius: 12px; }
 
 .split-note { color: var(--amber); font-size: 13px; font-weight: 700; margin-top: 8px; }
 .stoprow .split-note { margin-top: 4px; flex-basis: 100%; }
