@@ -375,13 +375,14 @@ function showLocated() {
 async function enterStation(station, distance) {
   clearNav();
   current = State.STATION;
+  const prevServices = discovery.stationCrs === station.c ? discovery.services : null;
   discovery = { stationCrs: station.c, services: null };
   setStatus(station.c, "ok");
   renderNotice(station.n.toUpperCase(), "Loading live trains…", true);
   try {
     const data = await api(`/api/board/${station.c}`);
     if (current !== State.STATION || discovery.stationCrs !== station.c) return;
-    discovery.services = data.services || [];
+    discovery.services = mergeBoardServices(data.services || [], prevServices);
     renderStation(station, discovery.services, distance);
   } catch (e) {
     renderNotice("CAN'T LOAD TRAINS", e.message, false, true);
@@ -411,6 +412,42 @@ function renderStation(station, services, distance) {
   document.getElementById("nearby").onclick = () => { pushNav(() => renderStation(station, services, distance)); renderNearbyStations(); };
   const pl = document.getElementById("pinned-link");
   if (pl) pl.onclick = () => { pushNav(() => renderStation(station, services, distance)); renderPinned(); };
+}
+
+// RTT's board cuts a service off once its *booked* time passes, even if it's
+// badly delayed and hasn't actually left yet — so a still-waiting train can
+// vanish from a fresh fetch. Carry forward anything missing from the new
+// list that we never saw an actual departure time for, so it stays visible
+// until it either reappears or is confirmed gone (capped so a genuine miss
+// doesn't linger forever).
+const GHOST_MAX_MS = 30 * 60000;
+function serviceUid(s) {
+  return (s.scheduleMetadata && s.scheduleMetadata.uniqueIdentity) || "";
+}
+function hasActuallyDeparted(s) {
+  const dep = s.temporalData && s.temporalData.departure;
+  return !!(dep && dep.realtimeActual);
+}
+function svcTime(s) {
+  const dep = s.temporalData && s.temporalData.departure;
+  const t = bestTime(dep) || bookedTime(dep);
+  return t ? t.getTime() : Infinity;
+}
+function mergeBoardServices(fresh, prev) {
+  if (!prev || !prev.length) return fresh;
+  const freshUids = new Set(fresh.map(serviceUid));
+  const now = Date.now();
+  const carried = [];
+  for (const s of prev) {
+    const uid = serviceUid(s);
+    if (!uid || freshUids.has(uid) || hasActuallyDeparted(s)) continue;
+    const ghostSince = s.__ghostSince || now;
+    if (now - ghostSince > GHOST_MAX_MS) continue;
+    carried.push({ ...s, __ghostSince: ghostSince });
+  }
+  const merged = fresh.concat(carried);
+  merged.sort((a, b) => svcTime(a) - svcTime(b));
+  return merged;
 }
 
 function departureCard(s) {
@@ -471,7 +508,8 @@ async function enterMoving() {
   try {
     const data = await api(`/api/board/${ahead.station.c}`);
     if (current !== State.MOVING) return;
-    const services = data.services || [];
+    const prevServices = discovery.stationCrs === ahead.station.c ? discovery.services : null;
+    const services = mergeBoardServices(data.services || [], prevServices);
     discovery = { stationCrs: ahead.station.c, services };
     candidates = rankByDirection(services, ahead.station);
 
