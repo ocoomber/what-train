@@ -859,20 +859,18 @@ function renderTrain(svc) {
 
   html += `<div class="train-status">${posLine}</div>`;
 
-  // Surface a divide/join anywhere still ahead, not just at the next stop —
-  // the user needs to know which half of the train to be in well before it
-  // happens, not just when the next-stop card scrolls into view.
-  if (!arrived) {
-    for (let i = nextIdx; i <= finalIdx; i++) {
-      const info = splitJoinInfo(stops[i]);
-      if (!info) continue;
-      const where = esc(locName(stops[i]));
-      const text = info.kind === "divide"
-        ? `⚡ This train divides at ${where} — check which part you need`
-        : `⚡ Joins with another train at ${where}`;
-      html += `<div class="delay-banner delay-warn">${text}</div>`;
-      break;
-    }
+  // A service with more than one top-level destination divides into separate
+  // portions somewhere ahead (confirmed against a live RTT board response —
+  // RTT signals this via multiple `destination` entries on the service itself,
+  // not a separate "associations" field). Surface it as soon as it's known,
+  // not just when the stop card scrolls into view, since the user needs to
+  // know which part of the train to be in well in advance.
+  const splitDests = (svc.destination || []).length > 1 ? svc.destination : null;
+  const formationIdx = formationChangeIdx(stops);
+  if (!arrived && splitDests) {
+    const where = formationIdx >= 0 ? ` at ${esc(locName(stops[formationIdx]))}` : "";
+    const parts = splitDests.map((d) => `${esc(d.location && d.location.description)} (${fmtClock(bestTime(d.temporalData))})`).join(" and ");
+    html += `<div class="delay-banner delay-warn">⚡ This train divides${where} — portions go to ${parts}. Check which part you need.</div>`;
   }
 
   // "Your stop" banner (if the user has tapped a stop to track).
@@ -896,11 +894,11 @@ function renderTrain(svc) {
 
   if (!arrived) {
     if (nextIdx === finalIdx) {
-      html += stopBlock("FINAL DESTINATION", final, true, myCrs);
+      html += stopBlock("FINAL DESTINATION", final, true, myCrs, nextIdx === formationIdx);
     } else {
-      html += stopBlock("NEXT STOP", next, false, myCrs);
+      html += stopBlock("NEXT STOP", next, false, myCrs, nextIdx === formationIdx);
       html += `<div class="screen-title" style="margin-top:6px">Then calling at</div>`;
-      for (let i = nextIdx + 1; i <= finalIdx; i++) html += stopRow(stops[i], i === finalIdx, myCrs);
+      for (let i = nextIdx + 1; i <= finalIdx; i++) html += stopRow(stops[i], i === finalIdx, myCrs, i === formationIdx);
     }
   }
 
@@ -974,33 +972,24 @@ function locName(stop) {
   return (stop.location && (stop.location.description || (stop.location.shortCodes && stop.location.shortCodes[0]))) || "—";
 }
 
-// RTT's public spec doesn't pin down an exact field for train splitting/joining
-// (divides), so this scans defensively for anything under an "associations"-like
-// key on the stop rather than assuming one precise shape — it only shows
-// something when a matching divide/join category is actually present, and stays
-// silent otherwise rather than risk inventing info that isn't there.
-function splitJoinInfo(stop) {
-  for (const key in stop) {
-    if (!/associat/i.test(key)) continue;
-    const val = stop[key];
-    const items = Array.isArray(val) ? val : (val ? [val] : []);
-    for (const item of items) {
-      if (!item) continue;
-      const cat = String(item.type || item.category || item.associationCategory || "");
-      if (/divide/i.test(cat)) return { kind: "divide", item };
-      if (/join/i.test(cat)) return { kind: "join", item };
-    }
+// Each calling point can carry locationMetadata.numberOfVehicles (confirmed
+// against a live RTT board response) — the stop where that count changes is
+// where the train divides or joins, pinpointing the banner's general "ahead
+// somewhere" notice to one exact stop.
+function formationChangeIdx(stops) {
+  let prev = null;
+  for (let i = 0; i < stops.length; i++) {
+    const n = stops[i].locationMetadata && stops[i].locationMetadata.numberOfVehicles;
+    if (n == null) continue;
+    if (prev != null && n !== prev) return i;
+    prev = n;
   }
-  return null;
+  return -1;
 }
 
-function splitJoinBadgeHtml(stop) {
-  const info = splitJoinInfo(stop);
-  if (!info) return "";
-  const text = info.kind === "divide"
-    ? "⚡ Train divides here — check which part you need"
-    : "⚡ Joins with another train here";
-  return `<div class="split-note">${esc(text)}</div>`;
+function splitJoinBadgeHtml(stop, isFormationChange) {
+  if (!isFormationChange) return "";
+  return `<div class="split-note">⚡ Train divides/joins here — check which part you need</div>`;
 }
 
 // Labelled scheduled/expected pair, shared by stopBlock and stopRow so the
@@ -1014,7 +1003,7 @@ function schedExpHtml(booked, arr, showBoth) {
     `<span class="time-label ${sev}">EXP</span> <span class="${severityBadgeClass(sev)}">${severityIcon(sev)} ${fmtClock(arr)}</span>`;
 }
 
-function stopBlock(label, stop, isFinal, myCrs) {
+function stopBlock(label, stop, isFinal, myCrs, isFormationChange) {
   const td = stop.temporalData || {};
   const tdArr = td.arrival || td.departure;       // intermediate/destination use arrival; origin uses departure
   const arr = bestTime(tdArr);
@@ -1031,12 +1020,12 @@ function stopBlock(label, stop, isFinal, myCrs) {
       <span class="stop-time">${schedExpHtml(booked, arr, showBoth)}</span>
     </div>
     ${plat ? `<div class="stop-plat">Plat ${esc(plat)}</div>` : ""}
-    ${splitJoinBadgeHtml(stop)}
+    ${splitJoinBadgeHtml(stop, isFormationChange)}
   </div>`;
 }
 
 // Compact one-line row for each remaining calling point in the full timetable.
-function stopRow(stop, isFinal, myCrs) {
+function stopRow(stop, isFinal, myCrs, isFormationChange) {
   const td = stop.temporalData || {};
   const tdArr = td.arrival || td.departure;
   const arr = bestTime(tdArr);
@@ -1051,7 +1040,7 @@ function stopRow(stop, isFinal, myCrs) {
       <span class="sr-eta">${etaText(arr)}</span>
       <span class="sr-time">${schedExpHtml(booked, arr, showBoth)}${plat ? ` · P${esc(plat)}` : ""}</span>
     </span>
-    ${splitJoinBadgeHtml(stop)}
+    ${splitJoinBadgeHtml(stop, isFormationChange)}
   </div>`;
 }
 
