@@ -112,6 +112,16 @@ body {
 }
 
 .card-row { display: flex; align-items: baseline; gap: 12px; }
+.pin-star {
+  margin-left: auto;
+  font-size: 26px;
+  line-height: 1;
+  color: var(--fg-dim);
+  padding: 4px 8px;
+  cursor: pointer;
+}
+.pin-star.on { color: var(--amber); }
+.train-head .op .pin-star { font-size: 18px; margin-left: 8px; padding: 0; vertical-align: middle; }
 .card-time { font-size: 40px; font-weight: 700; line-height: 1; }
 .card-dest { font-size: 24px; line-height: 1.15; margin: 6px 0 0; word-break: break-word; }
 .card-meta {
@@ -119,6 +129,7 @@ body {
   margin-top: 12px; font-size: 15px; color: var(--fg-dim);
 }
 .card-plat { color: var(--fg); }
+.op-name { color: var(--fg); font-weight: 700; }
 .badge-late { color: var(--red); font-weight: 700; font-size: 1.1em; }
 .badge-warn { color: var(--amber); font-weight: 700; font-size: 1.1em; }
 .badge-ontime { color: var(--green); }
@@ -164,7 +175,7 @@ body {
   display: flex; justify-content: space-between; align-items: flex-start;
   gap: 12px; margin-bottom: 8px;
 }
-.train-head .op { font-size: 18px; }
+.train-head .op { font-size: 18px; font-weight: 700; }
 .train-head .due { font-size: 15px; color: var(--fg-dim); margin-top: 2px; }
 .train-head .final { font-size: 16px; color: var(--fg-dim); text-align: right; }
 

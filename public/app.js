@@ -44,6 +44,7 @@ let lastSvc = null;          // last rendered service (QR back / signal-drop fal
 let lastLoadedAt = 0;        // when fresh service data last arrived
 let staleMsg = "";           // set when a refresh failed but we kept the old data
 let pinnedStation = null;    // {crs, pos} when the user manually picked a nearby station
+let pinnedTrains = loadPinnedTrains(); // [{uid, op, dest, time}] — saved candidates for quick re-find
 
 const $screen = document.getElementById("screen");
 const $statusText = document.getElementById("status-text");
@@ -141,6 +142,25 @@ function delaySeverity(min) {
 }
 function severityIcon(sev) { return sev === "bad" ? "✕" : sev === "warn" ? "▲" : "✓"; }
 function severityBadgeClass(sev) { return sev === "bad" ? "badge-late" : "badge-warn"; }
+
+// ---------- pinned trains ----------
+// A small saved shortlist (e.g. candidate replacements after a cancellation)
+// so the user can flip straight back to one without re-scanning a station board.
+const PINNED_MAX = 8;
+function loadPinnedTrains() {
+  try { return JSON.parse(localStorage.getItem("mytrain.pinned") || "[]"); } catch (_) { return []; }
+}
+function savePinnedTrains() {
+  try { localStorage.setItem("mytrain.pinned", JSON.stringify(pinnedTrains)); } catch (_) {}
+}
+function isPinned(uid) { return pinnedTrains.some((p) => p.uid === uid); }
+function togglePin(info) {
+  const i = pinnedTrains.findIndex((p) => p.uid === info.uid);
+  if (i >= 0) pinnedTrains.splice(i, 1);
+  else pinnedTrains.unshift({ ...info, at: Date.now() });
+  if (pinnedTrains.length > PINNED_MAX) pinnedTrains.length = PINNED_MAX;
+  savePinnedTrains();
+}
 function platformOf(meta) {
   const p = meta && meta.platform;
   return p ? (p.actual || p.planned || "") : "";
@@ -287,6 +307,37 @@ function renderNearbyStations() {
   document.getElementById("nb-back").onclick = evaluate;
 }
 
+// A saved shortlist of trains the user starred earlier — for quickly hopping
+// to a replacement after a cancellation, without re-scanning a station board.
+function pinnedRow(p) {
+  return `<button class="card" data-uid="${esc(p.uid)}" data-op="${esc(p.op)}">
+    <div class="card-row">
+      <span class="card-time">${esc(p.time)}</span>
+      <span class="pin-star on" data-pin-remove="${esc(p.uid)}" title="Remove">✕</span>
+    </div>
+    <div class="card-dest">${esc(p.dest)}</div>
+    <div class="card-meta"><span class="op-name">${esc(p.op)}</span></div>
+  </button>`;
+}
+function renderPinned(returnTo) {
+  const rows = pinnedTrains.length
+    ? pinnedTrains.map(pinnedRow).join("")
+    : `<div class="notice"><div class="big">No pinned trains</div><div class="sub">Tap ☆ on any train to save it here for quick access.</div></div>`;
+  $screen.innerHTML = `<div class="screen-title">⭐ Pinned trains</div>${rows}` +
+    `<button class="link-btn" id="pinned-back">← Back</button>`;
+  $screen.querySelectorAll(".card[data-uid]").forEach((el) => {
+    el.onclick = () => lockOnto(el.dataset.uid, el.dataset.op);
+  });
+  $screen.querySelectorAll("[data-pin-remove]").forEach((el) => {
+    el.onclick = (e) => {
+      e.stopPropagation();
+      togglePin({ uid: el.dataset.pinRemove });
+      renderPinned(returnTo);
+    };
+  });
+  document.getElementById("pinned-back").onclick = returnTo || (() => { if (lastSvc) renderTrain(lastSvc); else evaluate(); });
+}
+
 // Rare fallback: we have a fix but no station data to list (e.g. dataset failed).
 function showLocated() {
   if (current === State.IDLE) return;
@@ -327,10 +378,13 @@ function renderStation(station, services, distance) {
     `<div class="btn-row" style="margin-top:6px">
        <button class="btn" id="reload-board">↻ RELOAD</button>
        <button class="btn" id="nearby">NEARBY STATIONS →</button>
-     </div>`;
+     </div>` +
+    (pinnedTrains.length ? `<button class="link-btn" id="pinned-link">⭐ Pinned trains (${pinnedTrains.length})</button>` : "");
   bindCards();
   document.getElementById("reload-board").onclick = () => enterStation(station, distance);
   document.getElementById("nearby").onclick = renderNearbyStations;
+  const pl = document.getElementById("pinned-link");
+  if (pl) pl.onclick = () => renderPinned(() => renderStation(station, services, distance));
 }
 
 function departureCard(s) {
@@ -350,10 +404,30 @@ function departureCard(s) {
   const op = (s.scheduleMetadata && s.scheduleMetadata.operator && s.scheduleMetadata.operator.name) || "";
   const uid = (s.scheduleMetadata && s.scheduleMetadata.uniqueIdentity) || "";
   return `<button class="card" data-uid="${esc(uid)}" data-op="${esc(op)}">
-    <div class="card-row"><span class="card-time">${timeHtml}</span></div>
+    <div class="card-row"><span class="card-time">${timeHtml}</span>${pinStarHtml(uid, op, dest.name, fmtClock(live || booked))}</div>
     <div class="card-dest">${esc(dest.name)}</div>
-    <div class="card-meta"><span>${esc(op)}</span><span class="card-plat">${plat ? "Plat " + esc(plat) : "Plat —"}</span></div>
+    <div class="card-meta"><span class="op-name">${esc(op)}</span><span class="card-plat">${plat ? "Plat " + esc(plat) : "Plat —"}</span></div>
   </button>`;
+}
+
+// A tappable star for saving a train to the pinned shortlist, without
+// triggering the card's own "lock onto this train" click (stopPropagation).
+function pinStarHtml(uid, op, dest, time) {
+  const on = isPinned(uid);
+  return `<span class="pin-star${on ? " on" : ""}" data-pin-uid="${esc(uid)}" data-pin-op="${esc(op)}" ` +
+    `data-pin-dest="${esc(dest)}" data-pin-time="${esc(time)}" title="${on ? "Unpin" : "Pin this train"}">${on ? "★" : "☆"}</span>`;
+}
+function bindPinStars() {
+  $screen.querySelectorAll(".pin-star").forEach((el) => {
+    el.onclick = (e) => {
+      e.stopPropagation();
+      togglePin({ uid: el.dataset.pinUid, op: el.dataset.pinOp, dest: el.dataset.pinDest, time: el.dataset.pinTime });
+      const on = isPinned(el.dataset.pinUid);
+      el.textContent = on ? "★" : "☆";
+      el.classList.toggle("on", on);
+      el.title = on ? "Unpin" : "Pin this train";
+    };
+  });
 }
 
 // ---------- STATE 2: moving, unidentified ----------
@@ -416,9 +490,9 @@ function renderGuess() {
     <div class="screen-title">Are you on this train?</div>
     <div class="guess-wrap">
       <div class="guess-card">
-        <div class="card-row"><span class="card-time">${time}</span></div>
+        <div class="card-row"><span class="card-time">${time}</span>${pinStarHtml(uid, op, dest.name, time)}</div>
         <div class="card-dest">${esc(dest.name)}</div>
-        <div class="card-meta"><span>${esc(op)}</span></div>
+        <div class="card-meta"><span class="op-name">${esc(op)}</span></div>
         <div class="candidate-count">${remaining > 0 ? remaining + " other option(s)" : "last option"}</div>
       </div>
       <div class="btn-row">
@@ -427,12 +501,16 @@ function renderGuess() {
       </div>
     </div>
     <button class="link-btn" id="g-list">Show all departures instead</button>
-    <button class="link-btn" id="g-nearby">Wrong station? Pick a nearby one</button>`;
+    <button class="link-btn" id="g-nearby">Wrong station? Pick a nearby one</button>
+    ${pinnedTrains.length ? `<button class="link-btn" id="g-pinned">⭐ Pinned trains (${pinnedTrains.length})</button>` : ""}`;
   document.getElementById("g-yes").onclick = () => lockOnto(uid, op);
   document.getElementById("g-no").onclick = nextCandidate;
   document.getElementById("g-list").onclick = () =>
     renderFallbackList({ c: discovery.stationCrs, n: discovery.stationCrs }, discovery.services);
   document.getElementById("g-nearby").onclick = renderNearbyStations;
+  const gp = document.getElementById("g-pinned");
+  if (gp) gp.onclick = () => renderPinned(renderGuess);
+  bindPinStars();
 }
 
 function nextCandidate() {
@@ -449,10 +527,13 @@ function renderFallbackList(station, services) {
     `<div class="btn-row" style="margin-top:6px">
        <button class="btn" id="rescan">↻ RE-SCAN</button>
        <button class="btn" id="nearby">NEARBY STATIONS →</button>
-     </div>`;
+     </div>` +
+    (pinnedTrains.length ? `<button class="link-btn" id="pinned-link">⭐ Pinned trains (${pinnedTrains.length})</button>` : "");
   bindCards();
   document.getElementById("rescan").onclick = enterMoving;
   document.getElementById("nearby").onclick = renderNearbyStations;
+  const pl = document.getElementById("pinned-link");
+  if (pl) pl.onclick = () => renderPinned(() => renderFallbackList(station, services));
 }
 
 // ---------- STATE 3: confirmed ----------
@@ -574,7 +655,7 @@ function renderTrain(svc) {
 
   let html = `<div class="train-head">
       <div>
-        <div class="op">${esc(op)}</div>
+        <div class="op">${esc(op)}${pinStarHtml(locked.uid, op, finalName, fmtClock(originLive || originBooked))}</div>
         <div class="due">${dueHtml}</div>
       </div>
       <div class="final">to ${esc(finalName)}${headcode ? `<br>${esc(headcode)}` : ""}</div>
@@ -628,18 +709,22 @@ function renderTrain(svc) {
   html += `<div class="updated-note${staleMsg ? " warn" : ""}">${staleMsg ? esc(staleMsg) + " · " : "Updated "}${staleMsg ? "" : agoTxt + " · "}auto-refresh 60s</div>`;
   html += `<button class="btn btn-wide" id="qr" style="margin-top:8px">▦ SHARE / QR</button>`;
   html += `<button class="btn btn-wide" id="forget" style="margin-top:10px">DIFFERENT TRAIN</button>`;
+  if (pinnedTrains.length) html += `<button class="link-btn" id="pinned-link">⭐ Pinned trains (${pinnedTrains.length})</button>`;
 
   $screen.innerHTML = html;
   document.getElementById("refresh-now").onclick = () => loadService(false);
   document.getElementById("forget").onclick = forgetTrain;
   const qr = document.getElementById("qr");
   if (qr) qr.onclick = renderQR;
+  const pl = document.getElementById("pinned-link");
+  if (pl) pl.onclick = () => renderPinned(() => renderTrain(svc));
   // Tap a stop to mark it as "my stop" (tap again to clear).
   $screen.querySelectorAll("[data-crs]").forEach((el) => {
     el.onclick = () => setMyStop(el.getAttribute("data-crs"));
   });
   const ys = $screen.querySelector(".yourstop");
   if (ys) ys.onclick = () => setMyStop(locked.myStopCrs);
+  bindPinStars();
 }
 
 function stopCrs(stop) {
@@ -774,6 +859,7 @@ function bindCards() {
   $screen.querySelectorAll(".card").forEach((el) => {
     el.onclick = () => lockOnto(el.dataset.uid, el.dataset.op);
   });
+  bindPinStars();
 }
 function esc(s) {
   return String(s == null ? "" : s).replace(/[&<>"']/g, (c) =>
