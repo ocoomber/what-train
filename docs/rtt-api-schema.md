@@ -22,6 +22,17 @@ burning a request. It is **not** loaded by default — open it on demand.
 - The Worker (`src/index.js`) passes the upstream JSON through unmodified —
   no field stripping or renaming happens server-side.
 
+**This is the full set of upstream endpoints this app uses — not the full
+RTT API.** RTT v2 exposes more than this (e.g. filtering a location board by
+date/time window, searching services between two locations) that `what-train`
+has no need for and this doc doesn't cover. For anything beyond what's
+documented below:
+- Official spec / endpoint list: the RTT API portal at
+  [api-portal.rtt.io](https://api-portal.rtt.io/) (registration required —
+  this is also where the bearer token in `DEPLOY.md` comes from).
+- Token exchange (`/api/get_access_token`) is implemented in
+  `getBearer()` (`src/index.js:27`) but isn't an RTT data endpoint itself.
+
 ## Core shape: `temporalData`
 
 Every arrival/departure/pass event on every calling point uses the same
