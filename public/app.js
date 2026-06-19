@@ -1069,6 +1069,7 @@ function forgetTrain() {
   setStatus("LOCATING", "");
   renderNotice("FINDING YOU", "Re-checking your location…", true, false, false, true);
   startGeo();   // resume GPS to pick the next train
+  armAcquiringNudge();
 }
 
 // ---------- rendering primitives ----------
@@ -1085,7 +1086,7 @@ function renderNotice(big, sub, spinner, isError, allowForget, allowPinned) {
   if (retry) retry.onclick = () => {
     if (current === State.CONFIRMED) return loadService(false);
     current = State.ACQUIRING;
-    if (!lastFix) startGeo();
+    if (!lastFix) { startGeo(); armAcquiringNudge(); }
     evaluate();
   };
   const f2 = document.getElementById("forget2");
@@ -1195,8 +1196,14 @@ async function boot() {
     return;
   }
   startGeo();
+  armAcquiringNudge();
+}
 
-  // If no fix and no error after a while, nudge the user about permissions/signal.
+// If no fix and no error after a while, nudge the user about permissions/signal
+// instead of leaving them on a bare spinner with no way out. Needed anywhere
+// we drop back into State.ACQUIRING, not just on initial boot — re-acquiring a
+// fix (e.g. after forgetting a train) can be just as slow as the first one.
+function armAcquiringNudge() {
   setTimeout(() => {
     if (!lastFix && current === State.ACQUIRING) {
       renderNotice("STILL FINDING YOU",
