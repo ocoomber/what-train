@@ -1,7 +1,9 @@
 /* My Train service worker — caches the app shell for offline launch.
- * Live API requests (/api/*) and other origins always go to the network. */
+ * Live API requests (/api/*) and other origins always go to the network.
+ * Shell assets are network-first (see fetch handler below) so a deploy is
+ * visible on next load without anyone having to remember to bump CACHE. */
 
-const CACHE = "mytrain-shell-v9";
+const CACHE = "mytrain-shell-v10";
 const SHELL = [
   "./",
   "./styles.css",
@@ -42,28 +44,21 @@ self.addEventListener("fetch", (e) => {
   if (url.origin !== self.location.origin) return; // other origins -> network
   if (url.pathname.startsWith("/api/")) return;    // live data -> never cache
 
-  // Navigations always get the cached app shell (the clean root document),
-  // falling back to the network on a cold cache.
-  if (req.mode === "navigate") {
-    e.respondWith(
-      caches.match("./").then((shell) => shell || fetch(req).then(clean).catch(() => caches.match("./")))
-    );
-    return;
-  }
-
-  // Other shell assets: cache-first, with a safe offline fallback.
+  // Shell assets (including navigations): network-first, so a new deploy is
+  // visible on the very next load. Falls back to the cached copy when
+  // offline, keeping the app launchable without a connection.
+  const cacheKey = req.mode === "navigate" ? "./" : req;
   e.respondWith(
-    caches.match(req).then((cached) => {
-      if (cached) return cached;
-      return fetch(req)
-        .then((res) => {
-          if (res && res.ok && res.type === "basic") {
-            const copy = res.clone();
-            caches.open(CACHE).then((c) => c.put(req, copy));
-          }
-          return clean(res);
-        })
-        .catch(() => new Response("", { status: 504, statusText: "Offline" }));
-    })
+    fetch(req)
+      .then((res) => {
+        if (res && res.ok && res.type === "basic") {
+          const copy = res.clone();
+          caches.open(CACHE).then((c) => c.put(cacheKey, copy));
+        }
+        return clean(res);
+      })
+      .catch(() =>
+        caches.match(cacheKey).then((cached) => cached || new Response("", { status: 504, statusText: "Offline" }))
+      )
   );
 });
