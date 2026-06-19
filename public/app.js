@@ -351,7 +351,7 @@ function renderPinned() {
     : `<div class="notice"><div class="big">No pinned trains</div><div class="sub">Tap ☆ on any train to save it here for quick access.</div></div>`;
   $screen.innerHTML = `<div class="screen-title">⭐ Pinned trains</div>${rows}`;
   $screen.querySelectorAll(".card[data-uid]").forEach((el) => {
-    el.onclick = () => lockOnto(el.dataset.uid, el.dataset.op);
+    el.onclick = () => lockOnto(el.dataset.uid, el.dataset.op, false, renderPinned);
   });
   $screen.querySelectorAll("[data-pin-remove]").forEach((el) => {
     el.onclick = (e) => {
@@ -406,7 +406,7 @@ function renderStation(station, services, distance) {
        <button class="btn" id="nearby">NEARBY STATIONS →</button>
      </div>` +
     (pinnedTrains.length ? `<button class="link-btn" id="pinned-link">⭐ Pinned trains (${pinnedTrains.length})</button>` : "");
-  bindCards();
+  bindCards(() => renderStation(station, services, distance));
   document.getElementById("reload-board").onclick = () => enterStation(station, distance);
   document.getElementById("nearby").onclick = () => { pushNav(() => renderStation(station, services, distance)); renderNearbyStations(); };
   const pl = document.getElementById("pinned-link");
@@ -530,7 +530,7 @@ function renderGuess() {
     <button class="link-btn" id="g-list">Show all departures instead</button>
     <button class="link-btn" id="g-nearby">Wrong station? Pick a nearby one</button>
     ${pinnedTrains.length ? `<button class="link-btn" id="g-pinned">⭐ Pinned trains (${pinnedTrains.length})</button>` : ""}`;
-  document.getElementById("g-yes").onclick = () => lockOnto(uid, op);
+  document.getElementById("g-yes").onclick = () => lockOnto(uid, op, false, renderGuess);
   document.getElementById("g-no").onclick = nextCandidate;
   document.getElementById("g-list").onclick = () => {
     pushNav(renderGuess);
@@ -558,7 +558,7 @@ function renderFallbackList(station, services) {
        <button class="btn" id="nearby">NEARBY STATIONS →</button>
      </div>` +
     (pinnedTrains.length ? `<button class="link-btn" id="pinned-link">⭐ Pinned trains (${pinnedTrains.length})</button>` : "");
-  bindCards();
+  bindCards(() => renderFallbackList(station, services));
   document.getElementById("rescan").onclick = enterMoving;
   document.getElementById("nearby").onclick = () => { pushNav(() => renderFallbackList(station, services)); renderNearbyStations(); };
   const pl = document.getElementById("pinned-link");
@@ -566,9 +566,10 @@ function renderFallbackList(station, services) {
 }
 
 // ---------- STATE 3: confirmed ----------
-function lockOnto(uid, op, auto) {
+function lockOnto(uid, op, auto, returnTo) {
   if (!uid) return;
   clearNav();
+  if (returnTo) pushNav(returnTo);
   locked = { uid, op: op || "", auto: !!auto };
   try { sessionStorage.setItem("mytrain.locked", JSON.stringify(locked)); } catch (_) {}
   // Make the URL a deep link to this exact train (shareable / bookmarkable / QR-able).
@@ -884,9 +885,9 @@ function renderNotice(big, sub, spinner, isError, allowForget) {
   if (f2) f2.onclick = forgetTrain;
 }
 function refreshButton(label, id) { return `<button class="btn btn-wide" id="${id}">↻ ${esc(label)}</button>`; }
-function bindCards() {
+function bindCards(returnTo) {
   $screen.querySelectorAll(".card").forEach((el) => {
-    el.onclick = () => lockOnto(el.dataset.uid, el.dataset.op);
+    el.onclick = () => lockOnto(el.dataset.uid, el.dataset.op, false, returnTo);
   });
   bindPinStars();
 }
