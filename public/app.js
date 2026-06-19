@@ -45,6 +45,7 @@ let lastLoadedAt = 0;        // when fresh service data last arrived
 let staleMsg = "";           // set when a refresh failed but we kept the old data
 let pinnedStation = null;    // {crs, pos} when the user manually picked a nearby station
 let pinnedTrains = loadPinnedTrains(); // [{uid, op, dest, time}] — saved candidates for quick re-find
+prunePins();
 
 const $screen = document.getElementById("screen");
 const $statusText = document.getElementById("status-text");
@@ -176,14 +177,27 @@ function severityBadgeClass(sev) { return sev === "bad" ? "badge-late" : "badge-
 // A small saved shortlist (e.g. candidate replacements after a cancellation)
 // so the user can flip straight back to one without re-scanning a station board.
 const PINNED_MAX = 8;
+// Pins are for "what am I about to catch", not a lifetime collection — drop
+// anything older than a day (generous enough to still cover an overnight
+// service) so the list can't quietly fill up with trains long gone.
+const PINNED_TTL_MS = 24 * 60 * 60 * 1000;
 function loadPinnedTrains() {
   try { return JSON.parse(localStorage.getItem("mytrain.pinned") || "[]"); } catch (_) { return []; }
 }
 function savePinnedTrains() {
   try { localStorage.setItem("mytrain.pinned", JSON.stringify(pinnedTrains)); } catch (_) {}
 }
+function prunePins() {
+  const cutoff = Date.now() - PINNED_TTL_MS;
+  const fresh = pinnedTrains.filter((p) => (p.at || 0) >= cutoff);
+  if (fresh.length !== pinnedTrains.length) {
+    pinnedTrains = fresh;
+    savePinnedTrains();
+  }
+}
 function isPinned(uid) { return pinnedTrains.some((p) => p.uid === uid); }
 function togglePin(info) {
+  prunePins();
   const i = pinnedTrains.findIndex((p) => p.uid === info.uid);
   if (i >= 0) pinnedTrains.splice(i, 1);
   else pinnedTrains.unshift({ ...info, at: Date.now() });
@@ -346,6 +360,7 @@ function pinnedRow(p) {
   </button>`;
 }
 function renderPinned() {
+  prunePins();
   const rows = pinnedTrains.length
     ? pinnedTrains.map(pinnedRow).join("")
     : `<div class="notice"><div class="big">No pinned trains</div><div class="sub">Tap ☆ on any train to save it here for quick access.</div></div>`;
@@ -367,6 +382,7 @@ function showLocated() {
   if (current === State.IDLE) return;
   current = State.IDLE;
   clearNav();
+  prunePins();
   setStatus("LOCATED", "ok");
   renderNotice("GOT YOUR LOCATION ✓", "Couldn't find any nearby stations to list. Tap to try again.", false, true);
 }
@@ -374,6 +390,7 @@ function showLocated() {
 // ---------- STATE 1: at a station ----------
 async function enterStation(station, distance) {
   clearNav();
+  prunePins();
   current = State.STATION;
   const prevServices = discovery.stationCrs === station.c ? discovery.services : null;
   discovery = { stationCrs: station.c, services: null };
@@ -496,6 +513,7 @@ function bindPinStars() {
 // ---------- STATE 2: moving, unidentified ----------
 async function enterMoving() {
   clearNav();
+  prunePins();
   current = State.MOVING;
   pinnedStation = null;
   candidates = []; candidateIdx = 0;
@@ -607,6 +625,7 @@ function renderFallbackList(station, services) {
 function lockOnto(uid, op, auto, returnTo) {
   if (!uid) return;
   clearNav();
+  prunePins();
   if (returnTo) pushNav(returnTo);
   locked = { uid, op: op || "", auto: !!auto };
   try { sessionStorage.setItem("mytrain.locked", JSON.stringify(locked)); } catch (_) {}
@@ -889,6 +908,7 @@ function stopRow(stop, isFinal, myCrs) {
 
 function forgetTrain() {
   clearNav();
+  prunePins();
   clearInterval(refreshTimer);
   locked = null;
   try { sessionStorage.removeItem("mytrain.locked"); } catch (_) {}
