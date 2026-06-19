@@ -79,6 +79,8 @@ window.addEventListener("popstate", () => {
   updateBackButton();
   renderPrev();
 });
+// Signal's back — resume the normal GPS/live-board flow from the offline fallback.
+window.addEventListener("online", () => { if (current === State.IDLE) evaluate(); });
 
 // ---------- geo helpers ----------
 const toRad = (d) => (d * Math.PI) / 180;
@@ -287,8 +289,24 @@ function onPositionError(err) {
   }
 }
 
+// When there's no signal at all, live boards/services are unreachable —
+// fall back to the locally-saved pinned shortlist (the one thing that still
+// works straight from localStorage) instead of spinning on GPS forever.
+function showOfflineFallback() {
+  current = State.IDLE;
+  clearNav();
+  setStatus("OFFLINE", "err");
+  if (pinnedTrains.length) renderPinned();
+  else renderNotice("NO INTERNET", "Can't reach live train data right now.", false, true);
+}
+
 function evaluate() {
-  if (current === State.CONFIRMED || !lastFix) return;
+  if (current === State.CONFIRMED) return;
+  if (typeof navigator !== "undefined" && navigator.onLine === false) {
+    if (current !== State.IDLE) showOfflineFallback();
+    return;
+  }
+  if (!lastFix) return;
 
   // Respect a manually chosen nearby station until the user moves away from
   // it — even while moving fast, so picking a station doesn't get stomped by
@@ -972,6 +990,10 @@ async function boot() {
       loadService();
       startAutoRefresh();
     } catch (_) { sessionStorage.removeItem("mytrain.locked"); }
+  } else if (typeof navigator !== "undefined" && navigator.onLine === false) {
+    // No point waiting on GPS/live boards with no signal — go straight to
+    // whatever's already saved locally.
+    showOfflineFallback();
   } else {
     setStatus("STARTING", "");
     renderNotice("GETTING GPS", "Allow location to find your train.", true);
@@ -982,7 +1004,9 @@ async function boot() {
     stations = await res.json();
     crsIndex = new Map(stations.map((s) => [s.c, { y: s.y, x: s.x }]));
   } catch (_) {
-    if (current !== State.CONFIRMED) renderNotice("LOAD ERROR", "Couldn't load station data. Reload the app.", false, true);
+    if (current !== State.CONFIRMED && current !== State.IDLE) {
+      renderNotice("LOAD ERROR", "Couldn't load station data. Reload the app.", false, true);
+    }
   }
 
   // If we opened straight into a locked train (deep link / saved), don't start GPS.
