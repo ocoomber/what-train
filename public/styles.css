@@ -112,6 +112,8 @@ body {
 .badge-late { color: var(--red); font-weight: 700; }
 .badge-ontime { color: var(--green); }
 .strike { text-decoration: line-through; color: var(--fg-dim); }
+.time-label { font-size: 10px; letter-spacing: 1px; color: var(--fg-dim); }
+.time-label.late { color: var(--red); margin-left: 2px; }
 
 /* ---- the "are you on this train?" guess card ---- */
 .guess-wrap { display: flex; flex-direction: column; gap: 16px; }
