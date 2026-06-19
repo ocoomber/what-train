@@ -335,9 +335,11 @@ function evaluate() {
   }
   if (!lastFix) return;
 
-  // Respect a manually chosen nearby station until the user moves away from
-  // it — even while moving fast, so picking a station doesn't get stomped by
-  // the next GPS fix reverting to the "are you on this train?" guess flow.
+  // Respect whatever station the user is currently looking at (set by
+  // enterStation, whether reached automatically or picked manually) until
+  // they move meaningfully away from it — even while moving fast or drifting
+  // just past the proximity radius, so a stray GPS fix doesn't yank them out
+  // of the departures board they're actively reading.
   if (pinnedStation && distanceM(lastFix, pinnedStation.pos) < 500) return;
   pinnedStation = null;
 
@@ -438,7 +440,6 @@ function renderNearbyStations() {
     el.onclick = () => {
       const picked = list.find((x) => x.station.c === el.dataset.crs);
       if (!picked) return;
-      pinnedStation = { crs: picked.station.c, pos: lastFix };
       enterStation(picked.station, picked.distance);
     };
   });
@@ -489,6 +490,12 @@ async function enterStation(station, distance) {
   clearNav();
   prunePins();
   current = State.STATION;
+  // Pin this station the same way a manual pick does (see renderNearbyStations)
+  // so evaluate()'s pinned-station guard protects the departures board from
+  // being yanked away by a stray speed spike or drifting just past the
+  // proximity radius while the user is actively reading it — only leaving
+  // requires moving meaningfully away, not a single noisy GPS fix.
+  pinnedStation = { crs: station.c, pos: lastFix };
   const prevServices = discovery.stationCrs === station.c ? discovery.services : null;
   discovery = { stationCrs: station.c, services: null };
   setStatus(station.c, "ok");
