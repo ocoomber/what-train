@@ -51,6 +51,7 @@ const $statusText = document.getElementById("status-text");
 const $statusDot = document.getElementById("status-dot");
 const $speed = document.getElementById("speed-readout");
 const $backBtn = document.getElementById("back-btn");
+const $helpBtn = document.getElementById("help-btn");
 
 // ---------- in-app back navigation ----------
 // A standalone/full-screen PWA has no browser chrome back arrow, and the
@@ -972,9 +973,48 @@ function esc(s) {
     ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 }
 
+// ---------- guide ----------
+// A short "how it works" overlay for new users (auto-shown once) and
+// returning users (reachable any time via the "?" button). It's appended
+// to <body> rather than rendered into #screen, so it floats above whatever
+// screen is currently showing without disturbing app state underneath.
+const GUIDE_STEPS = [
+  "No typing — just allow location and the app does the rest.",
+  "<b>At a station:</b> tap the train you're on from the live departures.",
+  "<b>On a moving train:</b> confirm the best-guess train, or pick from the list.",
+  "<b>Locked on:</b> see every remaining stop with live times, platforms and delays, auto-refreshing every 60s.",
+  "Tap a stop to get a reminder banner when it's time to get off.",
+  "Pin a train (★), or share it as a QR code / link — both work from the train screen.",
+];
+function showGuide() {
+  const html = `<div class="guide-overlay" id="guide-overlay">
+    <div class="guide-card">
+      <h2>How My Train works</h2>
+      ${GUIDE_STEPS.map((s, i) => `<div class="guide-step"><span class="num">${i + 1}</span><span class="txt">${s}</span></div>`).join("")}
+      <button class="btn btn-wide" id="guide-ok">GOT IT</button>
+    </div>
+  </div>`;
+  document.body.insertAdjacentHTML("beforeend", html);
+  const overlay = document.getElementById("guide-overlay");
+  document.getElementById("guide-ok").onclick = hideGuide;
+  overlay.onclick = (e) => { if (e.target === overlay) hideGuide(); };
+}
+function hideGuide() {
+  const overlay = document.getElementById("guide-overlay");
+  if (overlay) overlay.remove();
+}
+if ($helpBtn) $helpBtn.onclick = showGuide;
+
 // ---------- boot ----------
 async function boot() {
   if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(() => {});
+
+  try {
+    if (!localStorage.getItem("mytrain.seenGuide")) {
+      localStorage.setItem("mytrain.seenGuide", "1");
+      showGuide();
+    }
+  } catch (_) {}
 
   let deepUid = null;
   try { deepUid = new URLSearchParams(location.search).get("train"); } catch (_) {}

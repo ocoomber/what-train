@@ -60,6 +60,55 @@ body {
 .dot.ok { background: var(--green); }
 .dot.err { background: var(--red); }
 #speed-readout { margin-left: auto; }
+.help-btn {
+  background: none;
+  border: 1px solid var(--fg-dim);
+  border-radius: 50%;
+  color: var(--fg-dim);
+  font: inherit;
+  font-size: 13px;
+  width: 22px; height: 22px;
+  line-height: 1;
+  padding: 0;
+  cursor: pointer;
+}
+#speed-readout:empty + .help-btn { margin-left: auto; }
+
+/* ---- guide overlay ---- */
+.guide-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.7);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  z-index: 100;
+}
+.guide-card {
+  background: var(--panel);
+  border: 1px solid var(--panel-edge);
+  border-radius: 12px;
+  padding: 20px;
+  max-width: 360px;
+  max-height: 80vh;
+  overflow-y: auto;
+}
+.guide-card h2 { margin: 0 0 12px; font-size: 18px; color: var(--fg); }
+.guide-step { display: flex; gap: 10px; margin-bottom: 14px; }
+.guide-step .num {
+  flex: 0 0 auto;
+  width: 22px; height: 22px;
+  border-radius: 50%;
+  background: var(--fg);
+  color: var(--bg);
+  font-size: 13px;
+  font-weight: 700;
+  display: flex; align-items: center; justify-content: center;
+}
+.guide-step .txt { font-size: 14px; line-height: 1.4; color: var(--fg-dim); }
+.guide-step .txt b { color: var(--fg); }
+.guide-card .btn-wide { margin-top: 4px; }
 
 /* ---- main screen ---- */
 #screen {
