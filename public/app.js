@@ -245,16 +245,34 @@ function nearestStations(pos, count) {
     .slice(0, count || 6);
 }
 
-// One tap to try the next-nearest station's board (for when you're stopped
-// between stations and your train isn't on the closest board).
-function switchNearbyStation() {
-  if (!lastFix) return;
-  const list = nearestStations(lastFix, 6);
-  if (!list.length) return;
-  const idx = list.findIndex((x) => x.station.c === discovery.stationCrs);
-  const nx = list[(idx + 1) % list.length];
-  pinnedStation = { crs: nx.station.c, pos: lastFix };
-  enterStation(nx.station, nx.distance);
+function nearbyStationRow({ station, distance }) {
+  const distTxt = distance < 1000 ? `${Math.round(distance)} m` : `${(distance / 1000).toFixed(1)} km`;
+  return `<button class="card" data-crs="${esc(station.c)}">
+    <div class="card-dest">${esc(station.n)}</div>
+    <div class="card-meta"><span>${esc(station.c)}</span><span>${distTxt} away</span></div>
+  </button>`;
+}
+
+// A pickable list of nearby stations — for when the auto-picked "station
+// ahead" isn't the one the train's actually calling at next.
+function renderNearbyStations() {
+  if (!lastFix) { renderNotice("NO GPS FIX", "Can't list nearby stations without a location.", false, true); return; }
+  const list = nearestStations(lastFix, 8);
+  const rows = list.length
+    ? list.map(nearbyStationRow).join("")
+    : `<div class="notice"><div class="big">No stations found nearby</div></div>`;
+  $screen.innerHTML =
+    `<div class="screen-title">Nearby stations — tap one</div>${rows}` +
+    `<button class="link-btn" id="nb-back">← Back</button>`;
+  $screen.querySelectorAll("[data-crs]").forEach((el) => {
+    el.onclick = () => {
+      const picked = list.find((x) => x.station.c === el.dataset.crs);
+      if (!picked) return;
+      pinnedStation = { crs: picked.station.c, pos: lastFix };
+      enterStation(picked.station, picked.distance);
+    };
+  });
+  document.getElementById("nb-back").onclick = evaluate;
 }
 
 // Rare fallback: we have a fix but no station data to list (e.g. dataset failed).
@@ -296,11 +314,11 @@ function renderStation(station, services, distance) {
     `<div class="screen-title">${heading}</div>${cards}` +
     `<div class="btn-row" style="margin-top:6px">
        <button class="btn" id="reload-board">↻ RELOAD</button>
-       <button class="btn" id="nearby">NEARBY STATION →</button>
+       <button class="btn" id="nearby">NEARBY STATIONS →</button>
      </div>`;
   bindCards();
   document.getElementById("reload-board").onclick = () => enterStation(station, distance);
-  document.getElementById("nearby").onclick = switchNearbyStation;
+  document.getElementById("nearby").onclick = renderNearbyStations;
 }
 
 function departureCard(s) {
@@ -396,11 +414,13 @@ function renderGuess() {
         <button class="btn btn-no" id="g-no">✗ NOT THIS ONE</button>
       </div>
     </div>
-    <button class="link-btn" id="g-list">Show all departures instead</button>`;
+    <button class="link-btn" id="g-list">Show all departures instead</button>
+    <button class="link-btn" id="g-nearby">Wrong station? Pick a nearby one</button>`;
   document.getElementById("g-yes").onclick = () => lockOnto(uid, op);
   document.getElementById("g-no").onclick = nextCandidate;
   document.getElementById("g-list").onclick = () =>
     renderFallbackList({ c: discovery.stationCrs, n: discovery.stationCrs }, discovery.services);
+  document.getElementById("g-nearby").onclick = renderNearbyStations;
 }
 
 function nextCandidate() {
@@ -416,11 +436,11 @@ function renderFallbackList(station, services) {
     `<div class="screen-title">Tap the train you're on (${esc(station.c)})</div>${cards}` +
     `<div class="btn-row" style="margin-top:6px">
        <button class="btn" id="rescan">↻ RE-SCAN</button>
-       <button class="btn" id="nearby">NEARBY STATION →</button>
+       <button class="btn" id="nearby">NEARBY STATIONS →</button>
      </div>`;
   bindCards();
   document.getElementById("rescan").onclick = enterMoving;
-  document.getElementById("nearby").onclick = switchNearbyStation;
+  document.getElementById("nearby").onclick = renderNearbyStations;
 }
 
 // ---------- STATE 3: confirmed ----------
