@@ -45,7 +45,6 @@ let lastLoadedAt = 0;        // when fresh service data last arrived
 let staleMsg = "";           // set when a refresh failed but we kept the old data
 let pinnedStation = null;    // {crs, pos} when the user manually picked a nearby station
 let pinnedTrains = loadPinnedTrains(); // [{uid, op, dest, time}] — saved candidates for quick re-find
-prunePins();
 
 const $screen = document.getElementById("screen");
 const $statusText = document.getElementById("status-text");
