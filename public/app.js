@@ -524,10 +524,8 @@ function renderTrain(svc) {
   const originDep = stops[0].temporalData && stops[0].temporalData.departure;
   const originBooked = bookedTime(originDep);
   const originLive = bestTime(originDep);
-  const originLate = latenessMin(originDep) >= 1;
-  const dueHtml = originLate
-    ? `Due <span class="strike">${fmtClock(originBooked)}</span> <span class="badge-late">${fmtClock(originLive)}</span>`
-    : `Due ${fmtClock(originBooked)}`;
+  const originLate = originBooked && originLive && Math.abs(originBooked - originLive) >= 60000;
+  const dueHtml = schedExpHtml(originBooked, originLive, originLate);
 
   // Where the train is right now.
   let posLine;
@@ -654,13 +652,21 @@ function locName(stop) {
   return (stop.location && (stop.location.description || (stop.location.shortCodes && stop.location.shortCodes[0]))) || "—";
 }
 
+// Labelled scheduled/expected pair, shared by stopBlock and stopRow so the
+// two times are never ambiguous about which is which.
+function schedExpHtml(booked, arr, showBoth) {
+  if (!showBoth) return `${fmtClock(booked || arr)}`;
+  return `<span class="time-label">SCH</span> <span class="strike">${fmtClock(booked)}</span> ` +
+    `<span class="time-label late">EXP</span> <span class="badge-late">${fmtClock(arr)}</span>`;
+}
+
 function stopBlock(label, stop, isFinal, myCrs) {
   const td = stop.temporalData || {};
   const tdArr = td.arrival || td.departure;       // intermediate/destination use arrival; origin uses departure
   const arr = bestTime(tdArr);
   const booked = bookedTime(tdArr);
   const plat = platformOf(stop.locationMetadata);
-  const showBooked = booked && arr && Math.abs(booked - arr) >= 60000;
+  const showBoth = booked && arr && Math.abs(booked - arr) >= 60000;
   const crs = stopCrs(stop);
   const mine = crs && crs === myCrs ? " mine" : "";
   return `<div class="stop${isFinal ? " final" : ""}${mine}" data-crs="${esc(crs)}">
@@ -668,7 +674,7 @@ function stopBlock(label, stop, isFinal, myCrs) {
     <div class="stop-name">${esc(locName(stop))}</div>
     <div class="stop-bottom">
       <span class="stop-eta">${etaText(arr)}</span>
-      <span class="stop-time">${fmtClock(arr)}${showBooked ? ` <span class="strike">${fmtClock(booked)}</span>` : ""}</span>
+      <span class="stop-time">${schedExpHtml(booked, arr, showBoth)}</span>
     </div>
     ${plat ? `<div class="stop-plat">Plat ${esc(plat)}</div>` : ""}
   </div>`;
@@ -679,7 +685,8 @@ function stopRow(stop, isFinal, myCrs) {
   const td = stop.temporalData || {};
   const tdArr = td.arrival || td.departure;
   const arr = bestTime(tdArr);
-  const late = latenessMin(tdArr);
+  const booked = bookedTime(tdArr);
+  const showBoth = booked && arr && Math.abs(booked - arr) >= 60000;
   const plat = platformOf(stop.locationMetadata);
   const crs = stopCrs(stop);
   const mine = crs && crs === myCrs ? " mine" : "";
@@ -687,7 +694,7 @@ function stopRow(stop, isFinal, myCrs) {
     <span class="sr-name">${esc(locName(stop))}${isFinal ? ` <span class="sr-dest">DEST</span>` : ""}${mine ? ` <span class="sr-dest">YOUR STOP</span>` : ""}</span>
     <span class="sr-right">
       <span class="sr-eta">${etaText(arr)}</span>
-      <span class="sr-time">${fmtClock(arr)}${late >= 2 ? ` <span class="badge-late">+${late}</span>` : ""}${plat ? ` · P${esc(plat)}` : ""}</span>
+      <span class="sr-time">${schedExpHtml(booked, arr, showBoth)}${plat ? ` · P${esc(plat)}` : ""}</span>
     </span>
   </div>`;
 }
