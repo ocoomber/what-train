@@ -10,7 +10,9 @@
  *     as scheduleAdvertised (booked), realtimeForecast/realtimeActual (live).
  *   - lateness is precomputed in minutes (realtimeAdvertisedLateness).
  *   - a service is identified by scheduleMetadata.uniqueIdentity (e.g. "gb-nr:L01525:2026-06-18").
- *   - destination[].location.shortCodes[0] gives the destination CRS, used for direction.
+ *   - destination[].location only carries longCodes (TIPLOC), never shortCodes (CRS);
+ *     direction-ranking matches destination[].location.description against
+ *     stations.json by name instead.
  */
 
 "use strict";
@@ -28,6 +30,7 @@ let current = State.ACQUIRING;
 
 let stations = [];           // [{c,n,y,x}]
 let crsIndex = new Map();    // CRS -> {y,x}
+let nameIndex = new Map();   // lowercased station name -> {y,x}
 let lastFix = null;
 let fixHistory = [];         // recent fixes for smoothing speed/bearing
 let speedMph = 0;
@@ -237,10 +240,7 @@ function platformOf(meta) {
 }
 function destInfo(svc) {
   const d = svc.destination && svc.destination[0] && svc.destination[0].location;
-  return {
-    name: (d && d.description) || "—",
-    crs: (d && d.shortCodes && d.shortCodes[0]) || null,
-  };
+  return { name: (d && d.description) || "—" };
 }
 
 // ---------- RTT API ----------
@@ -649,13 +649,15 @@ async function enterMoving() {
   }
 }
 
-// Rank departures so those heading our way come first (using destination CRS coords).
+// Rank departures so those heading our way come first (using destination name coords).
+// RTT's per-service origin/destination entries only carry longCodes (TIPLOC), never
+// shortCodes (CRS), so we match by station name against stations.json instead.
 function rankByDirection(services, atStation) {
   const from = { y: atStation.y, x: atStation.x };
   return services
     .map((s) => {
-      const crs = destInfo(s).crs;
-      const dest = crs ? crsIndex.get(crs) : null;
+      const name = destInfo(s).name;
+      const dest = name ? nameIndex.get(name.toLowerCase()) : null;
       let score = 999;
       if (dest && bearing != null) score = angleDiff(bearingDeg(from, dest), bearing);
       return { s, score };
@@ -1181,6 +1183,7 @@ async function boot() {
     .then((list) => {
       stations = list;
       crsIndex = new Map(stations.map((s) => [s.c, { y: s.y, x: s.x }]));
+      nameIndex = new Map(stations.map((s) => [s.n.toLowerCase(), { y: s.y, x: s.x }]));
     })
     .catch(() => {
       if (current !== State.CONFIRMED && current !== State.IDLE) {
