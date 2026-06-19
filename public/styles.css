@@ -358,3 +358,4 @@ body {
   margin: 18px 0 4px;
 }
 .app-footer a { color: inherit; text-decoration: underline; }
+.app-footer .footer-warn { color: var(--amber); }

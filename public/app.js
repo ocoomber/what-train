@@ -46,6 +46,31 @@ let staleMsg = "";           // set when a refresh failed but we kept the old da
 let pinnedStation = null;    // {crs, pos} when the user manually picked a nearby station
 let pinnedTrains = loadPinnedTrains(); // [{uid, op, dest, time}] — saved candidates for quick re-find
 
+// Opportunistic RTT rate-limit tracking — RTT's spec doesn't document a
+// rate-limit header, so this only ever gets populated if the Worker actually
+// forwards one (see rateLimitHeaders() in src/index.js); otherwise it stays
+// null and the footer shows nothing extra.
+let apiLimitInfo = null; // { remaining, limit } (strings, as RTT sent them)
+function updateApiLimitInfo(headers) {
+  let remaining = null, limit = null;
+  headers.forEach((value, key) => {
+    if (!/ratelimit/i.test(key)) return;
+    if (/remaining/i.test(key)) remaining = value;
+    else if (/limit/i.test(key)) limit = value;
+  });
+  if (remaining != null || limit != null) apiLimitInfo = { remaining, limit };
+}
+function apiLimitFooterHtml() {
+  if (!apiLimitInfo) return "";
+  const remaining = Number(apiLimitInfo.remaining);
+  if (!Number.isFinite(remaining)) return "";
+  const limit = Number(apiLimitInfo.limit);
+  const low = Number.isFinite(limit) && limit > 0 ? remaining / limit <= 0.1 : remaining <= 20;
+  if (!low) return "";
+  const text = Number.isFinite(limit) && limit > 0 ? `${remaining}/${limit} calls left` : `${remaining} calls left`;
+  return `<br><span class="footer-warn">⚠ Nearing RTT API limit — ${esc(text)}</span>`;
+}
+
 const $screen = document.getElementById("screen");
 const $statusText = document.getElementById("status-text");
 const $statusDot = document.getElementById("status-dot");
@@ -226,6 +251,7 @@ async function api(path) {
     throw new Error("API not configured. Set API_BASE in config.js.");
   }
   const res = await fetch(`${API_BASE}${path}`, { headers: { Accept: "application/json" } });
+  updateApiLimitInfo(res.headers);
   if (!res.ok) {
     let msg = `Service error (${res.status})`;
     try { const j = await res.json(); if (j.error) msg = j.error; } catch (_) {}
@@ -816,7 +842,11 @@ function renderTrain(svc) {
   html += `<button class="btn btn-wide" id="qr" style="margin-top:8px">▦ SHARE / QR</button>`;
   html += `<button class="btn btn-wide" id="forget" style="margin-top:10px">DIFFERENT TRAIN</button>`;
   if (pinnedTrains.length) html += `<button class="link-btn" id="pinned-link">⭐ Pinned trains (${pinnedTrains.length})</button>`;
-  html += `<div class="app-footer">Made by <a href="https://www.strangegoose.co.uk" target="_blank" rel="noopener">Strange Goose</a></div>`;
+  html += `<div class="app-footer">
+    Made by <a href="https://www.strangegoose.co.uk" target="_blank" rel="noopener">Strange Goose</a><br>
+    Train data via <a href="https://www.realtimetrains.co.uk" target="_blank" rel="noopener">Realtime Trains</a>
+    ${apiLimitFooterHtml()}
+  </div>`;
 
   $screen.innerHTML = html;
   document.getElementById("refresh-now").onclick = () => loadService(false);
