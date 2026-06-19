@@ -219,6 +219,12 @@ function onPositionError(err) {
 function evaluate() {
   if (current === State.CONFIRMED || !lastFix) return;
 
+  // Respect a manually chosen nearby station until the user moves away from
+  // it — even while moving fast, so picking a station doesn't get stomped by
+  // the next GPS fix reverting to the "are you on this train?" guess flow.
+  if (pinnedStation && distanceM(lastFix, pinnedStation.pos) < 500) return;
+  pinnedStation = null;
+
   // Moving with a known heading: try to pinpoint the specific train you're on
   // (best-guess card + full list as fallback).
   if (speedMph >= MOVING_MPH && bearing != null) {
@@ -230,9 +236,6 @@ function evaluate() {
   // offer the nearest station's live departures as tappable candidates.
   const near = nearestStation(lastFix);
   if (!near) { showLocated(); return; }
-  // Respect a manually chosen nearby station until the user moves away.
-  if (pinnedStation && distanceM(lastFix, pinnedStation.pos) < 500) return;
-  pinnedStation = null;
   if (current !== State.STATION || discovery.stationCrs !== near.station.c) {
     enterStation(near.station, near.distance);
   }
