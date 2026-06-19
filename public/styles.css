@@ -282,6 +282,7 @@ body {
 /* compact rows for the rest of the timetable */
 .stoprow {
   display: flex;
+  flex-wrap: wrap;
   justify-content: space-between;
   align-items: baseline;
   gap: 12px;
@@ -317,6 +318,9 @@ body {
 .hint-tap { font-size: 13px; color: var(--fg-dim); margin: 0 0 12px; }
 
 .stop.mine, .stoprow.mine { outline: 2px solid var(--fg); outline-offset: -2px; border-radius: 12px; }
+
+.split-note { color: var(--amber); font-size: 13px; font-weight: 700; margin-top: 8px; }
+.stoprow .split-note { margin-top: 4px; flex-basis: 100%; }
 
 .updated-note.warn { color: var(--amber); }
 

@@ -859,6 +859,22 @@ function renderTrain(svc) {
 
   html += `<div class="train-status">${posLine}</div>`;
 
+  // Surface a divide/join anywhere still ahead, not just at the next stop —
+  // the user needs to know which half of the train to be in well before it
+  // happens, not just when the next-stop card scrolls into view.
+  if (!arrived) {
+    for (let i = nextIdx; i <= finalIdx; i++) {
+      const info = splitJoinInfo(stops[i]);
+      if (!info) continue;
+      const where = esc(locName(stops[i]));
+      const text = info.kind === "divide"
+        ? `⚡ This train divides at ${where} — check which part you need`
+        : `⚡ Joins with another train at ${where}`;
+      html += `<div class="delay-banner delay-warn">${text}</div>`;
+      break;
+    }
+  }
+
   // "Your stop" banner (if the user has tapped a stop to track).
   const myCrs = locked.myStopCrs;
   if (myCrs) {
@@ -958,6 +974,35 @@ function locName(stop) {
   return (stop.location && (stop.location.description || (stop.location.shortCodes && stop.location.shortCodes[0]))) || "—";
 }
 
+// RTT's public spec doesn't pin down an exact field for train splitting/joining
+// (divides), so this scans defensively for anything under an "associations"-like
+// key on the stop rather than assuming one precise shape — it only shows
+// something when a matching divide/join category is actually present, and stays
+// silent otherwise rather than risk inventing info that isn't there.
+function splitJoinInfo(stop) {
+  for (const key in stop) {
+    if (!/associat/i.test(key)) continue;
+    const val = stop[key];
+    const items = Array.isArray(val) ? val : (val ? [val] : []);
+    for (const item of items) {
+      if (!item) continue;
+      const cat = String(item.type || item.category || item.associationCategory || "");
+      if (/divide/i.test(cat)) return { kind: "divide", item };
+      if (/join/i.test(cat)) return { kind: "join", item };
+    }
+  }
+  return null;
+}
+
+function splitJoinBadgeHtml(stop) {
+  const info = splitJoinInfo(stop);
+  if (!info) return "";
+  const text = info.kind === "divide"
+    ? "⚡ Train divides here — check which part you need"
+    : "⚡ Joins with another train here";
+  return `<div class="split-note">${esc(text)}</div>`;
+}
+
 // Labelled scheduled/expected pair, shared by stopBlock and stopRow so the
 // two times are never ambiguous about which is which. Severity (color +
 // icon) scales with how late, so the badge isn't a color-only signal.
@@ -986,6 +1031,7 @@ function stopBlock(label, stop, isFinal, myCrs) {
       <span class="stop-time">${schedExpHtml(booked, arr, showBoth)}</span>
     </div>
     ${plat ? `<div class="stop-plat">Plat ${esc(plat)}</div>` : ""}
+    ${splitJoinBadgeHtml(stop)}
   </div>`;
 }
 
@@ -1005,6 +1051,7 @@ function stopRow(stop, isFinal, myCrs) {
       <span class="sr-eta">${etaText(arr)}</span>
       <span class="sr-time">${schedExpHtml(booked, arr, showBoth)}${plat ? ` · P${esc(plat)}` : ""}</span>
     </span>
+    ${splitJoinBadgeHtml(stop)}
   </div>`;
 }
 
