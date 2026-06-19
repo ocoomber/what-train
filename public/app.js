@@ -132,6 +132,15 @@ function latenessMin(td) {
   const b = bookedTime(td), live = parseTime(td.realtimeForecast) || parseTime(td.realtimeActual);
   return b && live ? Math.round((live - b) / 60000) : 0;
 }
+// Three-tier delay severity, shared by the banner and every SCH/EXP badge so
+// color is never the only signal (each tier also gets a distinct icon).
+function delaySeverity(min) {
+  if (min >= 5) return "bad";
+  if (min >= 1) return "warn";
+  return "ok";
+}
+function severityIcon(sev) { return sev === "bad" ? "✕" : sev === "warn" ? "▲" : "✓"; }
+function severityBadgeClass(sev) { return sev === "bad" ? "badge-late" : "badge-warn"; }
 function platformOf(meta) {
   const p = meta && meta.platform;
   return p ? (p.actual || p.planned || "") : "";
@@ -250,9 +259,9 @@ function nearestStations(pos, count) {
 
 function nearbyStationRow({ station, distance }) {
   const distTxt = distance < 1000 ? `${Math.round(distance)} m` : `${(distance / 1000).toFixed(1)} km`;
-  return `<button class="card" data-crs="${esc(station.c)}">
-    <div class="card-dest">${esc(station.n)}</div>
-    <div class="card-meta"><span>${esc(station.c)}</span><span>${distTxt} away</span></div>
+  return `<button class="card station-row" data-crs="${esc(station.c)}">
+    <div class="card-dest">📍 ${esc(station.n)}</div>
+    <div class="card-meta"><span class="station-tag">${esc(station.c)}</span><span>${distTxt} away</span></div>
   </button>`;
 }
 
@@ -329,13 +338,13 @@ function departureCard(s) {
   const dest = destInfo(s);
   const booked = bookedTime(dep);
   const live = bestTime(dep);
-  const late = latenessMin(dep) >= 1;
+  const sev = delaySeverity(latenessMin(dep));
   const cancelled = (s.temporalData && (s.temporalData.displayAs === "CANCELLED")) ||
     (dep && dep.isCancelled);
   const timeHtml = cancelled
-    ? `<span class="badge-late">CANCELLED</span>`
-    : (late
-      ? `<span class="strike">${fmtClock(booked)}</span> <span class="badge-late">${fmtClock(live)}</span>`
+    ? `<span class="badge-late">✕ CANCELLED</span>`
+    : (sev !== "ok"
+      ? `<span class="strike">${fmtClock(booked)}</span> <span class="${severityBadgeClass(sev)}">${severityIcon(sev)} ${fmtClock(live)}</span>`
       : `${fmtClock(live || booked)}`);
   const plat = platformOf(s.locationMetadata);
   const op = (s.scheduleMetadata && s.scheduleMetadata.operator && s.scheduleMetadata.operator.name) || "";
@@ -574,11 +583,12 @@ function renderTrain(svc) {
   if (locked.auto) html += `<div class="auto-note">Auto-picked your most likely train — wrong one? Use the button below.</div>`;
 
   if (arrived) {
-    html += `<div class="delay-banner delay-ok">ARRIVED AT ${esc(finalName).toUpperCase()}</div>`;
-  } else if (delayMin >= 2) {
-    html += `<div class="delay-banner delay-bad">DELAYED ${delayMin} MIN${reason ? `<div class="delay-reason">${esc(reason)}</div>` : ""}</div>`;
+    html += `<div class="delay-banner delay-ok">✓ ARRIVED AT ${esc(finalName).toUpperCase()}</div>`;
   } else {
-    html += `<div class="delay-banner delay-ok">ON TIME${reason ? `<div class="delay-reason">${esc(reason)}</div>` : ""}</div>`;
+    const bannerSev = delaySeverity(delayMin);
+    const bannerIcon = severityIcon(bannerSev);
+    const bannerLabel = bannerSev === "bad" ? `DELAYED ${delayMin} MIN` : bannerSev === "warn" ? `RUNNING ${delayMin} MIN LATE` : "ON TIME";
+    html += `<div class="delay-banner delay-${bannerSev}">${bannerIcon} ${bannerLabel}${reason ? `<div class="delay-reason">${esc(reason)}</div>` : ""}</div>`;
   }
 
   html += `<div class="train-status">${posLine}</div>`;
@@ -676,11 +686,14 @@ function locName(stop) {
 }
 
 // Labelled scheduled/expected pair, shared by stopBlock and stopRow so the
-// two times are never ambiguous about which is which.
+// two times are never ambiguous about which is which. Severity (color +
+// icon) scales with how late, so the badge isn't a color-only signal.
 function schedExpHtml(booked, arr, showBoth) {
   if (!showBoth) return `${fmtClock(booked || arr)}`;
+  const min = booked && arr ? Math.round((arr - booked) / 60000) : 0;
+  const sev = delaySeverity(min);
   return `<span class="time-label">SCH</span> <span class="strike">${fmtClock(booked)}</span> ` +
-    `<span class="time-label late">EXP</span> <span class="badge-late">${fmtClock(arr)}</span>`;
+    `<span class="time-label ${sev}">EXP</span> <span class="${severityBadgeClass(sev)}">${severityIcon(sev)} ${fmtClock(arr)}</span>`;
 }
 
 function stopBlock(label, stop, isFinal, myCrs) {

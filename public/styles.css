@@ -101,6 +101,16 @@ body {
 }
 .card:active { background: #161d28; }
 
+.card.station-row { border-left: 4px solid var(--fg-dim); padding-left: 14px; }
+.station-tag {
+  font-size: 13px;
+  color: var(--bg);
+  background: var(--fg-dim);
+  border-radius: 4px;
+  padding: 2px 7px;
+  font-weight: 700;
+}
+
 .card-row { display: flex; align-items: baseline; gap: 12px; }
 .card-time { font-size: 40px; font-weight: 700; line-height: 1; }
 .card-dest { font-size: 24px; line-height: 1.15; margin: 6px 0 0; word-break: break-word; }
@@ -109,11 +119,13 @@ body {
   margin-top: 12px; font-size: 15px; color: var(--fg-dim);
 }
 .card-plat { color: var(--fg); }
-.badge-late { color: var(--red); font-weight: 700; }
+.badge-late { color: var(--red); font-weight: 700; font-size: 1.1em; }
+.badge-warn { color: var(--amber); font-weight: 700; font-size: 1.1em; }
 .badge-ontime { color: var(--green); }
 .strike { text-decoration: line-through; color: var(--fg-dim); }
-.time-label { font-size: 10px; letter-spacing: 1px; color: var(--fg-dim); }
-.time-label.late { color: var(--red); margin-left: 2px; }
+.time-label { font-size: 11px; font-weight: 700; letter-spacing: 1px; color: var(--fg-dim); }
+.time-label.bad { color: var(--red); margin-left: 2px; }
+.time-label.warn { color: var(--amber); margin-left: 2px; }
 
 /* ---- the "are you on this train?" guess card ---- */
 .guess-wrap { display: flex; flex-direction: column; gap: 16px; }
@@ -165,6 +177,7 @@ body {
   letter-spacing: 0.5px;
 }
 .delay-ok { background: rgba(58,208,122,0.12); color: var(--green); border: 1px solid rgba(58,208,122,0.4); }
+.delay-warn { background: rgba(255,176,32,0.12); color: var(--amber); border: 1px solid rgba(255,176,32,0.4); }
 .delay-bad { background: rgba(255,90,90,0.12); color: var(--red); border: 1px solid rgba(255,90,90,0.4); }
 .delay-reason { font-weight: 400; font-size: 15px; color: var(--fg); margin-top: 6px; }
 
