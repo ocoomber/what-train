@@ -519,6 +519,16 @@ function renderTrain(svc) {
   const finalName = locName(final);
   const headcode = (svc.scheduleMetadata && (svc.scheduleMetadata.trainReportingIdentity || svc.scheduleMetadata.identity)) || "";
 
+  // The origin's booked departure time — how this train is identified at
+  // the station — paired with its current expected/live time.
+  const originDep = stops[0].temporalData && stops[0].temporalData.departure;
+  const originBooked = bookedTime(originDep);
+  const originLive = bestTime(originDep);
+  const originLate = latenessMin(originDep) >= 1;
+  const dueHtml = originLate
+    ? `Due <span class="strike">${fmtClock(originBooked)}</span> <span class="badge-late">${fmtClock(originLive)}</span>`
+    : `Due ${fmtClock(originBooked)}`;
+
   // Where the train is right now.
   let posLine;
   if (arrived) {
@@ -533,7 +543,10 @@ function renderTrain(svc) {
   }
 
   let html = `<div class="train-head">
-      <div class="op">${esc(op)}</div>
+      <div>
+        <div class="op">${esc(op)}</div>
+        <div class="due">${dueHtml}</div>
+      </div>
       <div class="final">to ${esc(finalName)}${headcode ? `<br>${esc(headcode)}` : ""}</div>
     </div>`;
 
