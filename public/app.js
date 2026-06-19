@@ -145,7 +145,7 @@ function etaText(d) {
   const m = Math.round((d.getTime() - Date.now()) / 60000);
   if (m <= 0) return "DUE";
   if (m === 1) return "1 MIN";
-  if (m > 180) return fmtClock(d);
+  if (m > 60) return fmtClock(d);
   return `${m} MIN`;
 }
 
