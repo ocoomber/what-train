@@ -341,20 +341,73 @@ function evaluate() {
   if (pinnedStation && distanceM(lastFix, pinnedStation.pos) < 500) return;
   pinnedStation = null;
 
-  // Moving with a known heading: try to pinpoint the specific train you're on
-  // (best-guess card + full list as fallback).
-  if (speedMph >= MOVING_MPH && bearing != null) {
-    if (current !== State.MOVING) enterMoving();
+  // Genuinely close to a real station — show its live board regardless of
+  // current speed. This covers standing on a platform, a stopped train, and
+  // (importantly) a train pulling fast into or out of a stop: in practice
+  // waiting for the next station's board and picking from it there is far
+  // more reliable than guessing mid-journey, so it takes priority over the
+  // moving-guess flow below.
+  const near = nearestStation(lastFix, STATION_RADIUS_M);
+  if (near) {
+    if (current !== State.STATION || discovery.stationCrs !== near.station.c) {
+      enterStation(near.station, near.distance);
+    }
     return;
   }
 
-  // Otherwise — including standing still on a platform or a stopped train —
-  // offer the nearest station's live departures as tappable candidates.
-  const near = nearestStation(lastFix);
-  if (!near) { showLocated(); return; }
-  if (current !== State.STATION || discovery.stationCrs !== near.station.c) {
-    enterStation(near.station, near.distance);
+  // Moving with a known heading, between stations: don't auto-launch the
+  // best-guess train finder — it's a less fluid experience than just waiting
+  // for the next station. Show a calm "on the move" screen instead, with the
+  // guess flow available as an explicit, secondary "lost your train" action.
+  if (speedMph >= MOVING_MPH && bearing != null) {
+    if (current !== State.MOVING) enterBetweenStations();
+    return;
   }
+
+  // Standing still or slow and not close to any station (e.g. a stopped
+  // train between stops) — fall back to the nearest station's board however
+  // far away it is, same as before.
+  const wide = nearestStation(lastFix);
+  if (!wide) { showLocated(); return; }
+  if (current !== State.STATION || discovery.stationCrs !== wide.station.c) {
+    enterStation(wide.station, wide.distance);
+  }
+}
+
+// A calm "you're between stations" screen — replaces the old behavior of
+// auto-launching the best-guess train finder the moment you're moving fast.
+// The finder is still one tap away, but framed as a fallback for when you
+// genuinely can't wait (e.g. you forgot to pin a train at the last station).
+function enterBetweenStations() {
+  current = State.MOVING;
+  pinnedStation = null;
+  clearNav();
+  prunePins();
+  setStatus("ON A TRAIN", "ok");
+
+  const ahead = stationAhead(lastFix);
+  const sub = ahead
+    ? `Approaching ${ahead.station.n} — live departures will appear automatically when you arrive.`
+    : "Looking for the next station…";
+
+  let html = `<div class="notice">
+    <div class="big">ON THE MOVE</div>
+    <div class="sub">${esc(sub)}</div>
+  </div>`;
+  if (pinnedTrains.length) {
+    html += `<button class="btn btn-wide" id="resume-pinned">⭐ Your pinned trains (${pinnedTrains.length})</button>`;
+  }
+  html += `<button class="link-btn" id="find-now">🆘 Lost your train? Find it now</button>`;
+
+  $screen.innerHTML = html;
+  const rp = document.getElementById("resume-pinned");
+  if (rp) rp.onclick = () => { pushNav(enterBetweenStations); renderPinned(); };
+  document.getElementById("find-now").onclick = () => {
+    // enterMoving() clears the nav stack as it starts its own fresh
+    // discovery flow, so push the return target after calling it.
+    enterMoving();
+    pushNav(enterBetweenStations);
+  };
 }
 
 function nearestStations(pos, count) {
@@ -1010,11 +1063,11 @@ function esc(s) {
 // screen is currently showing without disturbing app state underneath.
 const GUIDE_STEPS = [
   "No typing — just allow location and the app does the rest.",
-  "<b>At a station:</b> tap the train you're on from the live departures.",
-  "<b>On a moving train:</b> confirm the best-guess train, or pick from the list.",
+  "<b>At a station:</b> tap the train you're on from the live departures, then pin it (★).",
   "<b>Locked on:</b> see every remaining stop with live times, platforms and delays, auto-refreshing every 60s.",
   "Tap a stop to get a reminder banner when it's time to get off.",
   "Pin a train (★), or share it as a QR code / link — both work from the train screen.",
+  "<b>Between stations:</b> the app waits for the next station's board rather than guessing — \"Lost your train?\" is there if you really can't wait.",
 ];
 function showGuide() {
   const html = `<div class="guide-overlay" id="guide-overlay">
