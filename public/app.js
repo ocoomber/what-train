@@ -438,6 +438,7 @@ function lockOnto(uid, op, auto) {
   setStatus("TRAIN LOCKED", "ok");
   stopGeo();              // no need to track location once we know the train
   lastSvc = null; lastLoadedAt = 0; staleMsg = "";   // fresh train, no stale fallback
+  try { localStorage.removeItem("mytrain.lastSvc"); } catch (_) {}
   loadService();
   startAutoRefresh();
 }
@@ -459,6 +460,14 @@ function startAutoRefresh() {
 }
 async function loadService(silent) {
   if (!locked) return;
+  if (!lastSvc) {
+    // Cold start (fresh reload): recover the last known timetable from disk
+    // before trying the network, so an offline reload doesn't show a blank error.
+    try {
+      const cached = JSON.parse(localStorage.getItem("mytrain.lastSvc") || "null");
+      if (cached && cached.uid === locked.uid) { lastSvc = cached.svc; lastLoadedAt = cached.at; }
+    } catch (_) {}
+  }
   if (!silent && !lastSvc) renderNotice("LOADING TRAIN", "Fetching live progress…", true);
   try {
     const data = await api(`/api/service?uid=${encodeURIComponent(locked.uid)}`);
@@ -467,6 +476,7 @@ async function loadService(silent) {
     lastLoadedAt = Date.now();
     staleMsg = "";
     renderTrain(svc);
+    try { localStorage.setItem("mytrain.lastSvc", JSON.stringify({ uid: locked.uid, at: lastLoadedAt, svc })); } catch (_) {}
   } catch (e) {
     if (lastSvc) {
       // Poor signal: keep showing the last good timetable rather than blanking it.
