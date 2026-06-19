@@ -815,6 +815,7 @@ function renderTrain(svc) {
   html += `<button class="btn btn-wide" id="qr" style="margin-top:8px">▦ SHARE / QR</button>`;
   html += `<button class="btn btn-wide" id="forget" style="margin-top:10px">DIFFERENT TRAIN</button>`;
   if (pinnedTrains.length) html += `<button class="link-btn" id="pinned-link">⭐ Pinned trains (${pinnedTrains.length})</button>`;
+  html += `<div class="app-footer">Made by <a href="https://www.strangegoose.co.uk" target="_blank" rel="noopener">Strange Goose</a></div>`;
 
   $screen.innerHTML = html;
   document.getElementById("refresh-now").onclick = () => loadService(false);
