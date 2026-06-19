@@ -42,6 +42,18 @@ async function getBearer(env) {
   return data.token;
 }
 
+// RTT doesn't document a rate-limit header in its public spec, but if it (or
+// a future version) ever sends one, this forwards it under a stable name
+// instead of us hardcoding a guess at the exact header — the client only
+// shows anything when one of these is actually present.
+function rateLimitHeaders(upstreamHeaders) {
+  const out = {};
+  for (const [key, value] of upstreamHeaders.entries()) {
+    if (/ratelimit/i.test(key)) out[`x-rtt-${key.toLowerCase()}`] = value;
+  }
+  return out;
+}
+
 async function proxy(upstreamPath, env, ctx, maxAgeSeconds = 30) {
   const url = `${RTT_BASE}${upstreamPath}`;
 
@@ -76,7 +88,10 @@ async function proxy(upstreamPath, env, ctx, maxAgeSeconds = 30) {
   }
   if (upstream.status === 429) {
     const retry = upstream.headers.get("Retry-After") || "30";
-    return json({ error: "Rate limited by Realtime Trains. Try again shortly." }, 429, { "Retry-After": retry });
+    return json({ error: "Rate limited by Realtime Trains. Try again shortly." }, 429, {
+      "Retry-After": retry,
+      ...rateLimitHeaders(upstream.headers),
+    });
   }
   if (!upstream.ok) {
     const text = await upstream.text().catch(() => "");
@@ -91,6 +106,7 @@ async function proxy(upstreamPath, env, ctx, maxAgeSeconds = 30) {
       "Content-Type": "application/json; charset=utf-8",
       "Cache-Control": `public, max-age=${maxAgeSeconds}`,
       "X-Cache": "MISS",
+      ...rateLimitHeaders(upstream.headers),
     },
   });
   ctx.waitUntil(cache.put(cacheKey, resp.clone()));
