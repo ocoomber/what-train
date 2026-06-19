@@ -151,6 +151,7 @@ body {
   gap: 12px; margin-bottom: 8px;
 }
 .train-head .op { font-size: 18px; }
+.train-head .due { font-size: 15px; color: var(--fg-dim); margin-top: 2px; }
 .train-head .final { font-size: 16px; color: var(--fg-dim); text-align: right; }
 
 .delay-banner {
