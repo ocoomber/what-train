@@ -309,10 +309,10 @@ function onPositionError(err) {
   if (current === State.CONFIRMED) return;
   if (err.code === err.PERMISSION_DENIED) {
     setStatus("NO GPS", "err");
-    renderNotice("LOCATION BLOCKED", "Allow location access for this site, then reload. My Train needs GPS to find your train.", false);
+    renderNotice("LOCATION BLOCKED", "Allow location access for this site, then reload. My Train needs GPS to find your train.", false, false, false, true);
   } else {
     setStatus("GPS ERROR", "err");
-    renderNotice("WAITING FOR GPS", "Couldn't get a location fix. Move near a window if you can.", true);
+    renderNotice("WAITING FOR GPS", "Couldn't get a location fix. Move near a window if you can.", true, false, false, true);
   }
 }
 
@@ -1067,18 +1067,19 @@ function forgetTrain() {
   lastSvc = null; lastLoadedAt = 0; staleMsg = "";
   pinnedStation = null;
   setStatus("LOCATING", "");
-  renderNotice("FINDING YOU", "Re-checking your location…", true);
+  renderNotice("FINDING YOU", "Re-checking your location…", true, false, false, true);
   startGeo();   // resume GPS to pick the next train
 }
 
 // ---------- rendering primitives ----------
-function renderNotice(big, sub, spinner, isError, allowForget) {
+function renderNotice(big, sub, spinner, isError, allowForget, allowPinned) {
   $screen.innerHTML = `<div class="notice">
     ${spinner ? `<div class="spinner"></div>` : ""}
     <div class="big">${esc(big)}</div>
     ${sub ? `<div class="sub">${esc(sub)}</div>` : ""}
     ${isError ? `<button class="btn btn-wide" id="retry">↻ TRY AGAIN</button>` : ""}
     ${allowForget ? `<button class="link-btn" id="forget2">Pick a different train</button>` : ""}
+    ${allowPinned && pinnedTrains.length ? `<button class="link-btn" id="pinned-link">⭐ Pinned trains (${pinnedTrains.length})</button>` : ""}
   </div>`;
   const retry = document.getElementById("retry");
   if (retry) retry.onclick = () => {
@@ -1089,6 +1090,8 @@ function renderNotice(big, sub, spinner, isError, allowForget) {
   };
   const f2 = document.getElementById("forget2");
   if (f2) f2.onclick = forgetTrain;
+  const pl = document.getElementById("pinned-link");
+  if (pl) pl.onclick = () => { pushNav(() => renderNotice(big, sub, spinner, isError, allowForget, allowPinned)); renderPinned(); };
 }
 function refreshButton(label, id) { return `<button class="btn btn-wide" id="${id}">↻ ${esc(label)}</button>`; }
 function bindCards(returnTo) {
@@ -1166,7 +1169,7 @@ async function boot() {
     showOfflineFallback();
   } else {
     setStatus("STARTING", "");
-    renderNotice("GETTING GPS", "Allow location to find your train.", true);
+    renderNotice("GETTING GPS", "Allow location to find your train.", true, false, false, true);
   }
 
   try {
@@ -1183,7 +1186,7 @@ async function boot() {
   if (current === State.CONFIRMED) return;
 
   if (!navigator.geolocation) {
-    renderNotice("NO GPS", "This device has no geolocation support.", false);
+    renderNotice("NO GPS", "This device has no geolocation support.", false, false, false, true);
     return;
   }
   startGeo();
@@ -1193,7 +1196,7 @@ async function boot() {
     if (!lastFix && current === State.ACQUIRING) {
       renderNotice("STILL FINDING YOU",
         "Check that location is allowed for this site (tap the icon left of the address) and that battery saver is off. Being near a window helps.",
-        true, true);
+        true, true, false, true);
     }
   }, 15000);
 }
