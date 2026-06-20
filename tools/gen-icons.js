@@ -97,8 +97,24 @@ function crc32(buf) {
 }
 
 const outDir = path.join(__dirname, "..", "public", "icons");
-fs.mkdirSync(outDir, { recursive: true });
-for (const size of [192, 512]) {
-  fs.writeFileSync(path.join(outDir, `icon-${size}.png`), makeIcon(size));
-  console.log(`wrote icon-${size}.png`);
+const checkMode = process.argv.includes("--check");
+
+if (checkMode) {
+  let drifted = false;
+  for (const size of [192, 512]) {
+    const file = path.join(outDir, `icon-${size}.png`);
+    const expected = makeIcon(size);
+    const actual = fs.existsSync(file) ? fs.readFileSync(file) : null;
+    if (!actual || !actual.equals(expected)) {
+      console.error(`icon-${size}.png is out of date — run \`node tools/gen-icons.js\` and commit the result`);
+      drifted = true;
+    }
+  }
+  process.exit(drifted ? 1 : 0);
+} else {
+  fs.mkdirSync(outDir, { recursive: true });
+  for (const size of [192, 512]) {
+    fs.writeFileSync(path.join(outDir, `icon-${size}.png`), makeIcon(size));
+    console.log(`wrote icon-${size}.png`);
+  }
 }
