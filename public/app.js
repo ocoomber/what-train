@@ -29,7 +29,6 @@ const State = { ACQUIRING: "ACQUIRING", IDLE: "IDLE", STATION: "STATION", MOVING
 let current = State.ACQUIRING;
 
 let stations = [];           // [{c,n,y,x}]
-let crsIndex = new Map();    // CRS -> {y,x}
 let nameIndex = new Map();   // lowercased station name -> {y,x}
 let lastFix = null;
 let fixHistory = [];         // recent fixes for smoothing speed/bearing
@@ -1096,7 +1095,6 @@ function renderNotice(big, sub, spinner, isError, allowForget, allowPinned) {
   const pl = document.getElementById("pinned-link");
   if (pl) pl.onclick = () => { pushNav(() => renderNotice(big, sub, spinner, isError, allowForget, allowPinned)); renderPinned(); };
 }
-function refreshButton(label, id) { return `<button class="btn btn-wide" id="${id}">↻ ${esc(label)}</button>`; }
 function bindCards(returnTo) {
   $screen.querySelectorAll(".card").forEach((el) => {
     el.onclick = () => lockOnto(el.dataset.uid, el.dataset.op, false, returnTo);
@@ -1182,7 +1180,6 @@ async function boot() {
     .then((res) => res.json())
     .then((list) => {
       stations = list;
-      crsIndex = new Map(stations.map((s) => [s.c, { y: s.y, x: s.x }]));
       nameIndex = new Map(stations.map((s) => [s.n.toLowerCase(), { y: s.y, x: s.x }]));
     })
     .catch(() => {
