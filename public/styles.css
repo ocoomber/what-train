@@ -231,6 +231,11 @@ body {
   cursor: pointer;
 }
 .btn:active { transform: scale(0.98); }
+.btn-ico { display: inline-block; }
+/* Tapped a refresh button: spin its icon + dim it so the input clearly registers
+   while the (silent) fetch runs. Clears when the screen re-renders. */
+.btn.is-busy { opacity: 0.75; pointer-events: none; }
+.btn.is-busy .btn-ico { animation: spin 0.7s linear infinite; }
 .btn-yes { background: var(--accent); color: #1a1500; border-color: var(--accent); }
 .btn-no { color: var(--fg-dim); }
 .btn-wide { width: 100%; }
