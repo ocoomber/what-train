@@ -5,7 +5,31 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1, user-scalable=no" />
   <meta name="theme-color" content="#0a0d12" />
   <meta name="mobile-web-app-capable" content="yes" />
-  <title>My Train</title>
+  <title>My Train — what train am I on?</title>
+  <meta name="description" content="A zero-typing PWA that uses your location to tell you what UK train you're on and every remaining stop, with live ETAs, platforms and delays." />
+
+  <!-- Open Graph: text-only share card by design (no og:image — no brand share asset yet). -->
+  <meta property="og:title" content="My Train — what train am I on?" />
+  <meta property="og:description" content="Open it on a UK train and it tells you which service you're on and what's coming next. No typing, no keyboard." />
+  <meta property="og:url" content="https://what-train.ocoomber.workers.dev/" />
+  <meta property="og:type" content="website" />
+  <meta property="og:site_name" content="My Train" />
+
+  <!-- Structured data: how machines (search, agents, future Claude) understand the page. -->
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "WebApplication",
+    "name": "My Train",
+    "description": "A zero-typing Progressive Web App that uses geolocation to tell a UK rail passenger what train they're on and every remaining stop, with live ETAs, platforms and delay status.",
+    "url": "https://what-train.ocoomber.workers.dev/",
+    "applicationCategory": "TravelApplication",
+    "operatingSystem": "Any",
+    "browserRequirements": "Requires JavaScript and geolocation.",
+    "offers": { "@type": "Offer", "price": "0", "priceCurrency": "GBP" }
+  }
+  </script>
+
   <link rel="manifest" href="manifest.json" />
   <link rel="icon" href="icons/icon.svg" type="image/svg+xml" />
   <link rel="apple-touch-icon" href="icons/icon-192.png" />
@@ -16,11 +40,11 @@
 </head>
 <body>
   <header id="topbar">
-    <button id="back-btn" class="back-btn" aria-label="Back" type="button">←</button>
+    <button id="back-btn" class="back-btn" aria-label="Back" type="button" data-agent-target="back">←</button>
     <span id="status-dot" class="dot"></span>
-    <span id="status-text">STARTING</span>
+    <span id="status-text" role="status" aria-live="polite">STARTING</span>
     <span id="speed-readout"></span>
-    <button id="help-btn" class="help-btn" aria-label="How it works" type="button">?</button>
+    <button id="help-btn" class="help-btn" aria-label="How it works" type="button" aria-expanded="false" data-agent-target="open-help">?</button>
   </header>
 
   <main id="screen">

@@ -1,0 +1,47 @@
+# My Train
+
+> A zero-typing Progressive Web App that uses the visitor's geolocation to tell a
+> UK rail passenger what train they're on and every remaining stop, with live
+> ETAs, platforms and delay status. Built for one-handed use on a moving train
+> with poor signal: it opens full-screen, fires GPS automatically, and never
+> shows a keyboard.
+
+Live site: https://what-train.ocoomber.workers.dev/
+
+## How it works
+
+The app has two main screens:
+
+- **Pick your train** — shows the nearest station's live departures as big
+  tappable cards. If the visitor is moving fast with a clear bearing, it leads
+  with a best-guess "Are you on this train?" card. No text input anywhere.
+- **Track your train** — once a service is chosen it locks on and shows where the
+  train is now plus every remaining stop to the destination, auto-refreshing
+  every 60 seconds, until the visitor taps "Different train".
+
+A locked train has a shareable deep link: `?train=<serviceId>` points straight at
+that exact service, so it can be bookmarked, shared, or turned into a QR code.
+
+## For agents
+
+- Interactive controls carry a stable `data-agent-target` attribute keyed to
+  function (e.g. `select-train`, `refresh-train`, `share-train`,
+  `pick-different-train`, `nearby-stations`, `open-help`). Prefer these over
+  CSS/position selectors — they survive restyles.
+- Loading state is exposed as `aria-busy` on the `#screen` element; the status
+  header (`#status-text`) is an `aria-live` region announcing state transitions.
+
+## API
+
+The site and its API share one origin (a Cloudflare Worker). The API proxies the
+Realtime Trains API v2 with the bearer token kept server-side:
+
+- `GET /api/health` — liveness check, returns `{"ok":true}`.
+- `GET /api/board/:crs` — live departure board for a 3-letter CRS station code.
+- `GET /api/service?uid=<uniqueIdentity>` — full calling-point detail for one
+  service.
+
+## Credits
+
+Station coordinates derived from the public UK-Train-Station-Locations dataset.
+Train data from Realtime Trains (https://www.realtimetrains.co.uk/).
