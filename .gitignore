@@ -11,3 +11,7 @@ npm-debug.log*
 *.swp
 .vscode/
 .idea/
+
+# Claude Code — commit shared project config (CLAUDE.md, principles, commands)
+# so remote/phone sessions load them; ignore only machine-local settings.
+.claude/settings.local.json
