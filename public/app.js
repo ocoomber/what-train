@@ -333,11 +333,41 @@ function stopGeo() {
   geoWatchId = null;
 }
 
+// Re-attempt a fix without a full restart. Safe to call repeatedly: bails if
+// we're locked on a train or already have a fix, and startGeo() re-subscribes
+// cleanly. Used by the "Try again" button, the permission listener, and on
+// returning to the app.
+function retryGeo() {
+  if (current === State.CONFIRMED || lastFix || !navigator.geolocation) return;
+  current = State.ACQUIRING;
+  startGeo();
+  armAcquiringNudge();
+  evaluate();
+}
+
+// Get from "blocked" to "working" without making the user hunt for a button.
+// When the OS/browser reports geolocation has been granted, or when the user
+// comes back to the app (e.g. from the Settings app or the permission sheet),
+// retry immediately. Permissions API support is patchy on iOS Safari, so the
+// visibility listener is the belt-and-braces fallback.
+function watchPermissionRecovery() {
+  try {
+    if (navigator.permissions && navigator.permissions.query) {
+      navigator.permissions.query({ name: "geolocation" })
+        .then((st) => { st.onchange = () => { if (st.state === "granted") retryGeo(); }; })
+        .catch(() => {});
+    }
+  } catch (_) {}
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible") retryGeo();
+  });
+}
+
 function onPositionError(err) {
   if (current === State.CONFIRMED) return;
   if (err.code === err.PERMISSION_DENIED) {
     setStatus("NO GPS", "err");
-    renderNotice("LOCATION BLOCKED", "Allow location access for this site, then reload. My Train needs GPS to find your train.", false, false, false, true);
+    renderNotice("LOCATION BLOCKED", "Allow location for this site — the app continues on its own once you do, or tap Try again.", false, true, false, true);
   } else {
     setStatus("GPS ERROR", "err");
     renderNotice("WAITING FOR GPS", "Couldn't get a location fix. Move near a window if you can.", true, false, false, true);
@@ -1249,6 +1279,7 @@ async function boot() {
   }
   startGeo();
   armAcquiringNudge();
+  watchPermissionRecovery();
 }
 
 // If no fix and no error after a while, nudge the user about permissions/signal
