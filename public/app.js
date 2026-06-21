@@ -184,6 +184,23 @@ function etaText(d) {
   if (m > 60) return fmtClock(d);
   return `${m} MIN`;
 }
+// Verbose remaining time in hrs + min ("1 hr 14 min", "14 min", "due") — used
+// where the full duration matters even past an hour, unlike etaText which
+// switches to a clock time above 60 min.
+function etaHM(d) {
+  if (!d) return "";
+  const m = Math.round((d.getTime() - Date.now()) / 60000);
+  if (m <= 0) return "due";
+  if (m < 60) return `${m} min`;
+  const h = Math.floor(m / 60), mm = m % 60;
+  return mm ? `${h} hr ${mm} min` : `${h} hr`;
+}
+// "in 1 hr 14 min · 14:32" style line, with a clean "Due now" past zero.
+function etaClockLine(d) {
+  if (!d) return "";
+  const m = Math.round((d.getTime() - Date.now()) / 60000);
+  return m <= 0 ? `Due now · ${fmtClock(d)}` : `in ${etaHM(d)} · ${fmtClock(d)}`;
+}
 
 // ---------- v2 field extraction ----------
 // Best displayed time for an IndividualTemporalData block: live forecast/actual, else booked.
@@ -294,7 +311,13 @@ function onPosition(pos) {
 }
 
 function startGeo() {
-  if (!navigator.geolocation || geoWatchId != null) return;
+  if (!navigator.geolocation) return;
+  // Always tear down any previous watch first. If the first attempt was denied
+  // or failed (e.g. location was off at launch), that watch is dead but
+  // geoWatchId stays set — without this, a later startGeo() (TRY AGAIN, or
+  // after the user enables location) would no-op and the app hangs on
+  // "STILL FINDING YOU" until a full restart.
+  stopGeo();
   const opts = { enableHighAccuracy: true, maximumAge: 5000, timeout: 30000 };
   // One quick request to get an initial fix fast, plus a continuous watch.
   navigator.geolocation.getCurrentPosition(onPosition, () => {}, { enableHighAccuracy: true, timeout: 15000 });
@@ -898,11 +921,20 @@ function renderTrain(svc) {
       const myStop = stops[mi];
       const myEta = bestTime((myStop.temporalData && (myStop.temporalData.arrival || myStop.temporalData.departure)) || null);
       if (arrived || mi < nextIdx) {
-        html += `<div class="yourstop done">Passed your stop (${esc(locName(myStop))}) · tap to clear</div>`;
+        html += `<div class="yourstop done">
+          <div class="ys-l1"><span class="ys-label">PASSED</span> ${esc(locName(myStop))}</div>
+          <div class="ys-l2">Tap to clear</div>
+        </div>`;
       } else if (mi === nextIdx) {
-        html += `<div class="yourstop now">GET OFF NEXT — ${esc(locName(myStop))} · ${etaText(myEta)}</div>`;
+        html += `<div class="yourstop now">
+          <div class="ys-l1"><span class="ys-label">GET OFF NEXT</span> ${esc(locName(myStop))}</div>
+          <div class="ys-l2">${etaClockLine(myEta)}</div>
+        </div>`;
       } else {
-        html += `<div class="yourstop">YOUR STOP — ${esc(locName(myStop))} · ${etaText(myEta)} (${fmtClock(myEta)})</div>`;
+        html += `<div class="yourstop">
+          <div class="ys-l1"><span class="ys-label">YOUR STOP</span> ${esc(locName(myStop))}</div>
+          <div class="ys-l2">${etaClockLine(myEta)}</div>
+        </div>`;
       }
     }
   } else if (!arrived) {
@@ -1035,12 +1067,14 @@ function stopBlock(label, stop, isFinal, myCrs, isFormationChange) {
   const mine = crs && crs === myCrs ? " mine" : "";
   return `<div class="stop${isFinal ? " final" : ""}${mine}" data-crs="${esc(crs)}">
     <div class="stop-label">${label}${mine ? " · YOUR STOP" : ""}</div>
-    <div class="stop-name">${esc(locName(stop))}</div>
-    <div class="stop-bottom">
+    <div class="stop-head">
+      <span class="stop-name">${esc(locName(stop))}</span>
       <span class="stop-eta">${etaText(arr)}</span>
+    </div>
+    <div class="stop-meta">
+      ${plat ? `<span class="stop-plat">Plat ${esc(plat)}</span>` : ""}
       <span class="stop-time">${schedExpHtml(booked, arr, showBoth)}</span>
     </div>
-    ${plat ? `<div class="stop-plat">Plat ${esc(plat)}</div>` : ""}
     ${splitJoinBadgeHtml(stop, isFormationChange)}
   </div>`;
 }
