@@ -893,12 +893,14 @@ function renderTrain(svc) {
   const finalName = locName(final);
   const headcode = (svc.scheduleMetadata && (svc.scheduleMetadata.trainReportingIdentity || svc.scheduleMetadata.identity)) || "";
 
-  // The origin's booked departure time — how this train is identified at
-  // the station — paired with its current expected/live time.
+  // Identify the service the way a passenger names it: its scheduled departure
+  // time from its origin station, plus the origin name ("23:30 from Brighton").
+  // Deliberately NOT a punctuality status — that only reflected the origin
+  // departure and contradicted the live running status shown in the banner/hero.
   const originDep = stops[0].temporalData && stops[0].temporalData.departure;
   const originBooked = bookedTime(originDep);
   const originLive = bestTime(originDep);
-  const dueHtml = schedExpHtml(originBooked, originLive);
+  const dueHtml = `${fmtClock(originBooked || originLive)} from ${esc(locName(stops[0]))}`;
 
   // Where the train is right now.
   let posLine;
