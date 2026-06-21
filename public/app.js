@@ -156,6 +156,12 @@ function setStatus(text, kind) {
   $statusText.textContent = text;
   $statusDot.className = "dot" + (kind ? " " + kind : "");
 }
+// Reflect loading state in the DOM (aria-busy) so screen readers and agents
+// know when the screen is mid-fetch vs. showing real content. Driven from the
+// renders: true only while the loading spinner is up.
+function setBusy(busy) {
+  $screen.setAttribute("aria-busy", busy ? "true" : "false");
+}
 function compass(deg) { return ["N", "NE", "E", "SE", "S", "SW", "W", "NW"][Math.round(deg / 45) % 8]; }
 function updateSpeedReadout() {
   if (lastFix) $speed.textContent = `${Math.round(speedMph)} mph${bearing == null ? "" : " " + compass(bearing)}`;
@@ -396,9 +402,9 @@ function enterBetweenStations() {
     <div class="sub">${esc(sub)}</div>
   </div>`;
   if (pinnedTrains.length) {
-    html += `<button class="btn btn-wide" id="resume-pinned">⭐ Your pinned trains (${pinnedTrains.length})</button>`;
+    html += `<button class="btn btn-wide" id="resume-pinned" data-agent-target="pinned-trains">⭐ Your pinned trains (${pinnedTrains.length})</button>`;
   }
-  html += `<button class="link-btn" id="find-now">🆘 Lost your train? Find it now</button>`;
+  html += `<button class="link-btn" id="find-now" data-agent-target="find-train-now">🆘 Lost your train? Find it now</button>`;
 
   $screen.innerHTML = html;
   const rp = document.getElementById("resume-pinned");
@@ -420,7 +426,7 @@ function nearestStations(pos, count) {
 
 function nearbyStationRow({ station, distance }) {
   const distTxt = distance < 1000 ? `${Math.round(distance)} m` : `${(distance / 1000).toFixed(1)} km`;
-  return `<button class="card station-row" data-crs="${esc(station.c)}">
+  return `<button class="card station-row" data-crs="${esc(station.c)}" data-agent-target="select-station">
     <div class="card-dest">📍 ${esc(station.n)}</div>
     <div class="card-meta"><span class="station-tag">${esc(station.c)}</span><span>${distTxt} away</span></div>
   </button>`;
@@ -447,7 +453,7 @@ function renderNearbyStations() {
 // A saved shortlist of trains the user starred earlier — for quickly hopping
 // to a replacement after a cancellation, without re-scanning a station board.
 function pinnedRow(p) {
-  return `<button class="card" data-uid="${esc(p.uid)}" data-op="${esc(p.op)}">
+  return `<button class="card" data-uid="${esc(p.uid)}" data-op="${esc(p.op)}" data-agent-target="select-train">
     <div class="card-row">
       <span class="card-time">${esc(p.time)}</span>
       <span class="pin-star on" data-pin-remove="${esc(p.uid)}" title="Remove">✕</span>
@@ -523,10 +529,11 @@ function renderStation(station, services, distance) {
   $screen.innerHTML =
     `<div class="screen-title">${heading}</div>${cards}` +
     `<div class="btn-row" style="margin-top:6px">
-       <button class="btn" id="reload-board">↻ RELOAD</button>
-       <button class="btn" id="nearby">NEARBY STATIONS →</button>
+       <button class="btn" id="reload-board" data-agent-target="reload-board">↻ RELOAD</button>
+       <button class="btn" id="nearby" data-agent-target="nearby-stations">NEARBY STATIONS →</button>
      </div>` +
-    (pinnedTrains.length ? `<button class="link-btn" id="pinned-link">⭐ Pinned trains (${pinnedTrains.length})</button>` : "");
+    (pinnedTrains.length ? `<button class="link-btn" id="pinned-link" data-agent-target="pinned-trains">⭐ Pinned trains (${pinnedTrains.length})</button>` : "");
+  setBusy(false);
   bindCards(() => renderStation(station, services, distance));
   document.getElementById("reload-board").onclick = () => enterStation(station, distance);
   document.getElementById("nearby").onclick = () => { pushNav(() => renderStation(station, services, distance)); renderNearbyStations(); };
@@ -586,7 +593,7 @@ function departureCard(s) {
   const plat = platformOf(s.locationMetadata);
   const op = (s.scheduleMetadata && s.scheduleMetadata.operator && s.scheduleMetadata.operator.name) || "";
   const uid = (s.scheduleMetadata && s.scheduleMetadata.uniqueIdentity) || "";
-  return `<button class="card" data-uid="${esc(uid)}" data-op="${esc(op)}">
+  return `<button class="card" data-uid="${esc(uid)}" data-op="${esc(op)}" data-agent-target="select-train">
     <div class="card-row"><span class="card-time">${timeHtml}</span>${pinStarHtml(uid, op, dest.name, fmtClock(live || booked))}</div>
     <div class="card-dest">${esc(dest.name)}</div>
     <div class="card-meta"><span class="op-name">${esc(op)}</span><span class="card-plat">${plat ? "Plat " + esc(plat) : "Plat —"}</span></div>
@@ -684,13 +691,14 @@ function renderGuess() {
         <div class="candidate-count">${remaining > 0 ? remaining + " other option(s)" : "last option"}</div>
       </div>
       <div class="btn-row">
-        <button class="btn btn-yes" id="g-yes">✓ YES</button>
-        <button class="btn btn-no" id="g-no">✗ NOT THIS ONE</button>
+        <button class="btn btn-yes" id="g-yes" data-agent-target="confirm-guessed-train">✓ YES</button>
+        <button class="btn btn-no" id="g-no" data-agent-target="reject-guessed-train">✗ NOT THIS ONE</button>
       </div>
     </div>
-    <button class="link-btn" id="g-list">Show all departures instead</button>
-    <button class="link-btn" id="g-nearby">Wrong station? Pick a nearby one</button>
-    ${pinnedTrains.length ? `<button class="link-btn" id="g-pinned">⭐ Pinned trains (${pinnedTrains.length})</button>` : ""}`;
+    <button class="link-btn" id="g-list" data-agent-target="show-all-departures">Show all departures instead</button>
+    <button class="link-btn" id="g-nearby" data-agent-target="nearby-stations">Wrong station? Pick a nearby one</button>
+    ${pinnedTrains.length ? `<button class="link-btn" id="g-pinned" data-agent-target="pinned-trains">⭐ Pinned trains (${pinnedTrains.length})</button>` : ""}`;
+  setBusy(false);
   document.getElementById("g-yes").onclick = () => lockOnto(uid, op, false, renderGuess);
   document.getElementById("g-no").onclick = nextCandidate;
   document.getElementById("g-list").onclick = () => {
@@ -715,10 +723,11 @@ function renderFallbackList(station, services) {
   $screen.innerHTML =
     `<div class="screen-title">Tap the train you're on (${esc(station.c)})</div>${cards}` +
     `<div class="btn-row" style="margin-top:6px">
-       <button class="btn" id="rescan">↻ RE-SCAN</button>
-       <button class="btn" id="nearby">NEARBY STATIONS →</button>
+       <button class="btn" id="rescan" data-agent-target="rescan">↻ RE-SCAN</button>
+       <button class="btn" id="nearby" data-agent-target="nearby-stations">NEARBY STATIONS →</button>
      </div>` +
-    (pinnedTrains.length ? `<button class="link-btn" id="pinned-link">⭐ Pinned trains (${pinnedTrains.length})</button>` : "");
+    (pinnedTrains.length ? `<button class="link-btn" id="pinned-link" data-agent-target="pinned-trains">⭐ Pinned trains (${pinnedTrains.length})</button>` : "");
+  setBusy(false);
   bindCards(() => renderFallbackList(station, services));
   document.getElementById("rescan").onclick = enterMoving;
   document.getElementById("nearby").onclick = () => { pushNav(() => renderFallbackList(station, services)); renderNearbyStations(); };
@@ -910,13 +919,13 @@ function renderTrain(svc) {
     }
   }
 
-  html += `<button class="btn btn-wide refresh-btn" id="refresh-now">↻ REFRESH</button>`;
+  html += `<button class="btn btn-wide refresh-btn" id="refresh-now" data-agent-target="refresh-train">↻ REFRESH</button>`;
   const ago = lastLoadedAt ? Math.round((Date.now() - lastLoadedAt) / 60000) : 0;
   const agoTxt = !lastLoadedAt ? "now" : (ago <= 0 ? "just now" : `${ago} min ago`);
   html += `<div class="updated-note${staleMsg ? " warn" : ""}">${staleMsg ? esc(staleMsg) + " · " : "Updated "}${staleMsg ? "" : agoTxt + " · "}auto-refresh 60s</div>`;
-  html += `<button class="btn btn-wide" id="qr" style="margin-top:8px">▦ SHARE / QR</button>`;
-  html += `<button class="btn btn-wide" id="forget" style="margin-top:10px">DIFFERENT TRAIN</button>`;
-  if (pinnedTrains.length) html += `<button class="link-btn" id="pinned-link">⭐ Pinned trains (${pinnedTrains.length})</button>`;
+  html += `<button class="btn btn-wide" id="qr" style="margin-top:8px" data-agent-target="share-train">▦ SHARE / QR</button>`;
+  html += `<button class="btn btn-wide" id="forget" style="margin-top:10px" data-agent-target="pick-different-train">DIFFERENT TRAIN</button>`;
+  if (pinnedTrains.length) html += `<button class="link-btn" id="pinned-link" data-agent-target="pinned-trains">⭐ Pinned trains (${pinnedTrains.length})</button>`;
   html += `<div class="app-footer">
     Made by <a href="https://www.strangegoose.co.uk" target="_blank" rel="noopener">Strange Goose</a><br>
     Train data via <a href="https://www.realtimetrains.co.uk" target="_blank" rel="noopener">Realtime Trains</a>
@@ -924,6 +933,7 @@ function renderTrain(svc) {
   </div>`;
 
   $screen.innerHTML = html;
+  setBusy(false);
   document.getElementById("refresh-now").onclick = () => loadService(false);
   document.getElementById("forget").onclick = forgetTrain;
   const qr = document.getElementById("qr");
@@ -970,7 +980,7 @@ function renderQR() {
     <div class="screen-title">Scan to open this train</div>
     ${svg ? `<div class="qr-box">${svg}</div>` : `<div class="sub">Couldn't draw a QR here — use Share instead.</div>`}
     <div class="sub">Point a phone camera at this to open the same live timetable.</div>
-    <button class="btn btn-wide" id="qr-share">🔗 SHARE LINK</button>
+    <button class="btn btn-wide" id="qr-share" data-agent-target="share-train">🔗 SHARE LINK</button>
   </div>`;
   const s = document.getElementById("qr-share");
   if (s) s.onclick = shareTrain;
@@ -1079,10 +1089,11 @@ function renderNotice(big, sub, spinner, isError, allowForget, allowPinned) {
     ${spinner ? `<div class="spinner"></div>` : ""}
     <div class="big">${esc(big)}</div>
     ${sub ? `<div class="sub">${esc(sub)}</div>` : ""}
-    ${isError ? `<button class="btn btn-wide" id="retry">↻ TRY AGAIN</button>` : ""}
-    ${allowForget ? `<button class="link-btn" id="forget2">Pick a different train</button>` : ""}
-    ${allowPinned && pinnedTrains.length ? `<button class="link-btn" id="pinned-link">⭐ Pinned trains (${pinnedTrains.length})</button>` : ""}
+    ${isError ? `<button class="btn btn-wide" id="retry" data-agent-target="retry">↻ TRY AGAIN</button>` : ""}
+    ${allowForget ? `<button class="link-btn" id="forget2" data-agent-target="pick-different-train">Pick a different train</button>` : ""}
+    ${allowPinned && pinnedTrains.length ? `<button class="link-btn" id="pinned-link" data-agent-target="pinned-trains">⭐ Pinned trains (${pinnedTrains.length})</button>` : ""}
   </div>`;
+  setBusy(!!spinner);
   const retry = document.getElementById("retry");
   if (retry) retry.onclick = () => {
     if (current === State.CONFIRMED) return loadService(false);
@@ -1120,21 +1131,23 @@ const GUIDE_STEPS = [
   "<b>Between stations:</b> the app waits for the next station's board rather than guessing — \"Lost your train?\" is there if you really can't wait.",
 ];
 function showGuide() {
-  const html = `<div class="guide-overlay" id="guide-overlay">
+  const html = `<div class="guide-overlay" id="guide-overlay" role="dialog" aria-modal="true" aria-label="How My Train works">
     <div class="guide-card">
       <h2>How My Train works</h2>
       ${GUIDE_STEPS.map((s, i) => `<div class="guide-step"><span class="num">${i + 1}</span><span class="txt">${s}</span></div>`).join("")}
-      <button class="btn btn-wide" id="guide-ok">GOT IT</button>
+      <button class="btn btn-wide" id="guide-ok" data-agent-target="close-help">GOT IT</button>
     </div>
   </div>`;
   document.body.insertAdjacentHTML("beforeend", html);
   const overlay = document.getElementById("guide-overlay");
+  if ($helpBtn) $helpBtn.setAttribute("aria-expanded", "true");
   document.getElementById("guide-ok").onclick = hideGuide;
   overlay.onclick = (e) => { if (e.target === overlay) hideGuide(); };
 }
 function hideGuide() {
   const overlay = document.getElementById("guide-overlay");
   if (overlay) overlay.remove();
+  if ($helpBtn) $helpBtn.setAttribute("aria-expanded", "false");
 }
 if ($helpBtn) $helpBtn.onclick = showGuide;
 
