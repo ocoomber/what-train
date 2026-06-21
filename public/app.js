@@ -1103,19 +1103,19 @@ function stopHero(stop, kind, isFinal) {
   const lateMin = booked && arr ? Math.round((arr - booked) / 60000) : 0;
   const late = lateMin >= 1;
   const eyebrow = kind === "getoff" ? "GET OFF NEXT"
-    : kind === "yourstop" ? (isFinal ? "YOUR STOP · LAST STOP" : "YOUR STOP")
+    : kind === "yourstop" ? (isFinal ? "YOUR LAST STOP" : "YOUR STOP")
     : isFinal ? "FINAL DESTINATION" : "NEXT STOP";
   const status = late
     ? `<div class="sh-status late">▲ ${lateMin} min late</div>`
     : `<div class="sh-status ok">✓ On time</div>`;
   const arrives = late ? `Arrives ${fmtClock(arr)} · was ${fmtClock(booked)}` : `Arrives ${fmtClock(arr)}`;
   return `<div class="stophero${kind === "getoff" ? " is-now" : ""}${late ? " is-late" : ""}${isFinal ? " is-final" : ""}" role="button" tabindex="0" data-crs="${esc(stopCrs(stop))}">
-    <div class="sh-eye">${eyebrow}</div>
-    <div class="sh-name">${esc(locName(stop))}</div>
-    <div class="sh-when">
-      <span class="sh-when-eta"><span class="sh-eta-lbl">ETA</span> <b>${etaHM(arr) || "—"}</b></span>
+    <div class="sh-eye-row">
+      <span class="sh-eye">${eyebrow}</span>
       ${status}
     </div>
+    <div class="sh-name">${esc(locName(stop))}</div>
+    <div class="sh-when"><span class="sh-eta-lbl">ETA</span> <b>${etaHM(arr) || "—"}</b></div>
     <div class="sh-meta"><span class="sh-arr">${arrives}</span>${plat ? `<span class="sh-plat">Plat ${esc(plat)}</span>` : ""}</div>
   </div>`;
 }

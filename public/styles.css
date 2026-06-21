@@ -283,8 +283,10 @@ body {
   margin: 6px 0 12px; word-break: break-word;
 }
 .stophero.is-now .sh-name { color: var(--red); text-shadow: 0 0 11px rgba(255,107,107,0.4); }
-.sh-when { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px 12px; }
-.sh-when-eta { display: flex; align-items: baseline; gap: 9px; }
+.sh-eye-row { display: flex; align-items: center; justify-content: space-between; gap: 8px 12px; }
+.sh-eye-row .sh-eye { flex: 1 1 auto; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sh-eye-row .sh-status { flex: 0 0 auto; }
+.sh-when { display: flex; align-items: baseline; gap: 9px; }
 .sh-eta-lbl { font-size: 12px; letter-spacing: 2px; text-transform: uppercase; color: var(--fg-mid); }
 .sh-when b {
   font-size: 30px; font-weight: 700; line-height: 1; white-space: nowrap;
