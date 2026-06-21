@@ -304,6 +304,8 @@ body {
 }
 .stoprow.final { border-bottom: none; }
 .sr-name { font-size: 20px; flex: 1 1 0; min-width: 0; }
+.sr-name.sr-long { font-size: 17px; }
+.sr-name.sr-xlong { font-size: 15px; }
 .sr-dest {
   font-size: 11px;
   color: var(--bg);
