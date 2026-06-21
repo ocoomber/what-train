@@ -1055,8 +1055,13 @@ function stopRow(stop, isFinal, myCrs, isFormationChange) {
   const plat = platformOf(stop.locationMetadata);
   const crs = stopCrs(stop);
   const mine = crs && crs === myCrs ? " mine" : "";
+  const name = locName(stop);
+  // Step the name's font down on longer names so they wrap less (readable
+  // floor at .sr-xlong). Length-based rather than measuring the DOM, so it
+  // costs nothing on the 60s auto-refresh.
+  const sizeClass = name.length > 25 ? " sr-xlong" : name.length > 17 ? " sr-long" : "";
   return `<div class="stoprow${isFinal ? " final" : ""}${mine}" data-crs="${esc(crs)}">
-    <span class="sr-name">${esc(locName(stop))}${isFinal ? ` <span class="sr-dest">DEST</span>` : ""}${mine ? ` <span class="sr-dest">YOUR STOP</span>` : ""}</span>
+    <span class="sr-name${sizeClass}">${esc(name)}${isFinal ? ` <span class="sr-dest">DEST</span>` : ""}${mine ? ` <span class="sr-dest">YOUR STOP</span>` : ""}</span>
     <span class="sr-right">
       <span class="sr-eta">${etaText(arr)}</span>
       <span class="sr-time">${schedExpHtml(booked, arr, showBoth)}${plat ? ` · P${esc(plat)}` : ""}</span>
