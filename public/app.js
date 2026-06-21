@@ -949,7 +949,7 @@ function renderTrain(svc) {
     if (myIdx !== nextIdx) {
       // Next stop demoted to a quiet, still-tappable line (it's general info now).
       const nArr = bestTime((next.temporalData && (next.temporalData.arrival || next.temporalData.departure)) || null);
-      html += `<div class="nextline" data-crs="${esc(stopCrs(next))}">
+      html += `<div class="nextline" role="button" tabindex="0" data-crs="${esc(stopCrs(next))}">
         <span><span class="nl-label">Next stop</span> ${esc(locName(next))}</span>
         <span class="nl-eta">${etaHM(nArr) || "—"}</span>
       </div>`;
@@ -961,7 +961,7 @@ function renderTrain(svc) {
 
   // If the chosen stop is already behind us, collapse it to a small clear-me line.
   if (myIdx >= 0 && (arrived || myIdx < nextIdx)) {
-    html += `<div class="passed-note" data-crs="${esc(myCrs)}">Passed ${esc(locName(stops[myIdx]))} · tap to clear</div>`;
+    html += `<div class="passed-note" role="button" tabindex="0" data-crs="${esc(myCrs)}">Passed ${esc(locName(stops[myIdx]))} · tap to clear</div>`;
   }
 
   if (!arrived && finalIdx > nextIdx) {
@@ -990,9 +990,11 @@ function renderTrain(svc) {
   if (qr) qr.onclick = () => { pushNav(() => renderTrain(svc)); renderQR(); };
   const pl = document.getElementById("pinned-link");
   if (pl) pl.onclick = () => { pushNav(() => renderTrain(svc)); renderPinned(); };
-  // Tap a stop to mark it as "my stop" (tap again to clear).
+  // Tap (or keyboard-activate) a stop to mark it as "my stop" (again to clear).
   $screen.querySelectorAll("[data-crs]").forEach((el) => {
-    el.onclick = () => setMyStop(el.getAttribute("data-crs"));
+    const act = () => setMyStop(el.getAttribute("data-crs"));
+    el.onclick = act;
+    el.onkeydown = (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); act(); } };
   });
   bindPinStars();
 }
@@ -1087,7 +1089,7 @@ function stopHero(stop, kind, isFinal) {
     ? `<div class="sh-status late">▲ ${lateMin} min late</div>`
     : `<div class="sh-status ok">✓ On time</div>`;
   const arrives = late ? `Arrives ${fmtClock(arr)} · was ${fmtClock(booked)}` : `Arrives ${fmtClock(arr)}`;
-  return `<div class="stophero${kind === "getoff" ? " is-now" : ""}${late ? " is-late" : ""}${isFinal ? " is-final" : ""}" data-crs="${esc(stopCrs(stop))}">
+  return `<div class="stophero${kind === "getoff" ? " is-now" : ""}${late ? " is-late" : ""}${isFinal ? " is-final" : ""}" role="button" tabindex="0" data-crs="${esc(stopCrs(stop))}">
     <div class="sh-eye">${eyebrow}</div>
     <div class="sh-name">${esc(locName(stop))}</div>
     <div class="sh-when">
@@ -1112,7 +1114,7 @@ function stopRow(stop, isFinal, myCrs, isFormationChange) {
   // floor at .sr-xlong). Length-based rather than measuring the DOM, so it
   // costs nothing on the 60s auto-refresh.
   const sizeClass = name.length > 25 ? " sr-xlong" : name.length > 17 ? " sr-long" : "";
-  return `<div class="stoprow${isFinal ? " final" : ""}${mine}" data-crs="${esc(crs)}">
+  return `<div class="stoprow${isFinal ? " final" : ""}${mine}" role="button" tabindex="0" data-crs="${esc(crs)}">
     <span class="sr-name${sizeClass}">${esc(name)}${isFinal ? ` <span class="sr-dest">DEST</span>` : ""}${mine ? ` <span class="sr-dest">YOUR STOP</span>` : ""}</span>
     <span class="sr-right">
       <span class="sr-eta">${etaHM(arr) || "—"}</span>

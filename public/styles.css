@@ -16,6 +16,9 @@
 
 * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
 
+/* Visible keyboard focus for every interactive element (mouse/touch unaffected). */
+:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
+
 html, body {
   margin: 0;
   height: 100%;
@@ -198,11 +201,7 @@ body {
 .op-name { color: var(--fg); font-weight: 700; }
 .badge-late { color: var(--red); font-weight: 700; font-size: 1.1em; }
 .badge-warn { color: var(--amber); font-weight: 700; font-size: 1.1em; }
-.badge-ontime { color: var(--green); }
 .strike { text-decoration: line-through; color: var(--fg-dim); }
-.time-label { font-size: 11px; font-weight: 700; letter-spacing: 1px; color: var(--fg-dim); }
-.time-label.bad { color: var(--red); margin-left: 2px; }
-.time-label.warn { color: var(--amber); margin-left: 2px; }
 
 /* ---- the "are you on this train?" guess card ---- */
 .guess-wrap { display: flex; flex-direction: column; gap: 16px; }
@@ -253,9 +252,9 @@ body {
   font-weight: 700;
   letter-spacing: 0.5px;
 }
-.delay-ok { background: rgba(58,208,122,0.12); color: var(--green); border: 1px solid rgba(58,208,122,0.4); }
-.delay-warn { background: rgba(255,176,32,0.12); color: var(--amber); border: 1px solid rgba(255,176,32,0.4); }
-.delay-bad { background: rgba(255,90,90,0.12); color: var(--red); border: 1px solid rgba(255,90,90,0.4); }
+.delay-ok { background: rgba(79,208,138,0.12); color: var(--green); border: 1px solid rgba(79,208,138,0.4); }
+.delay-warn { background: rgba(255,157,46,0.12); color: var(--amber); border: 1px solid rgba(255,157,46,0.4); }
+.delay-bad { background: rgba(255,107,107,0.12); color: var(--red); border: 1px solid rgba(255,107,107,0.4); }
 .delay-reason { font-weight: 400; font-size: 15px; color: var(--fg); margin-top: 6px; }
 
 /* ---- the hero: your chosen stop (or the next one), as the train's LED board ---- */
