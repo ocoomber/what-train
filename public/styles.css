@@ -265,13 +265,15 @@ body {
 }
 .stop.final { border-color: var(--accent); }
 .stop-label { font-size: 11px; letter-spacing: 3px; color: var(--fg-dim); text-transform: uppercase; }
-.stop-name { font-size: 34px; line-height: 1.05; margin: 8px 0 6px; color: #fff; word-break: break-word; }
-.stop-bottom { display: flex; justify-content: space-between; align-items: flex-end; margin-top: 14px; }
-.stop-eta { font-family: var(--num); font-size: 48px; font-weight: 700; line-height: 0.9; color: var(--accent); }
-.stop-time { font-family: var(--num); font-size: 14px; color: var(--fg-dim); text-align: right; }
+/* Line 1: stop name (flexes/shrinks) + time-to-go pinned right.
+   Line 2: platform + scheduled/expected times. */
+.stop-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin: 8px 0 10px; }
+.stop-name { font-size: 28px; line-height: 1.05; color: #fff; word-break: break-word; flex: 1 1 0; min-width: 0; }
+.stop-eta { font-family: var(--num); font-size: 30px; font-weight: 700; line-height: 1; color: var(--accent); flex: 0 0 auto; }
+.stop-meta { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; }
+.stop-time { font-family: var(--num); font-size: 14px; color: var(--fg-dim); }
 .stop-plat {
   display: inline-block;
-  margin-top: 12px;
   font-size: 13px;
   font-weight: 700;
   color: var(--fg);
@@ -330,6 +332,10 @@ body {
 }
 .yourstop.now { background: var(--red); color: #fff; }
 .yourstop.done { background: var(--panel); color: var(--fg-dim); font-weight: 400; font-size: 15px; border: 1px solid var(--panel-edge); }
+.yourstop .ys-l1 { line-height: 1.15; }
+.yourstop .ys-label { font-size: 12px; letter-spacing: 2px; opacity: 0.85; margin-right: 4px; }
+.yourstop .ys-l2 { font-family: var(--num); font-weight: 400; font-size: 15px; margin-top: 5px; }
+.yourstop.done .ys-l2 { opacity: 0.8; }
 .hint-tap { font-size: 13px; color: var(--fg-dim); margin: 0 0 12px; }
 
 .stop.mine, .stoprow.mine { outline: 2px solid var(--accent); outline-offset: -2px; border-radius: 12px; }
