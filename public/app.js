@@ -176,17 +176,9 @@ function parseTime(iso) {
 function fmtClock(d) {
   return d ? `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}` : "--:--";
 }
-function etaText(d) {
-  if (!d) return "";
-  const m = Math.round((d.getTime() - Date.now()) / 60000);
-  if (m <= 0) return "DUE";
-  if (m === 1) return "1 MIN";
-  if (m > 60) return fmtClock(d);
-  return `${m} MIN`;
-}
-// Verbose remaining time in hrs + min ("1 hr 14 min", "14 min", "due") — used
-// where the full duration matters even past an hour, unlike etaText which
-// switches to a clock time above 60 min.
+// Remaining time as a plain duration ("1 hr 14 min", "14 min", "due") — always
+// answers "how long until", never flipping to a clock time the reader has to
+// subtract from.
 function etaHM(d) {
   if (!d) return "";
   const m = Math.round((d.getTime() - Date.now()) / 60000);
@@ -194,12 +186,6 @@ function etaHM(d) {
   if (m < 60) return `${m} min`;
   const h = Math.floor(m / 60), mm = m % 60;
   return mm ? `${h} hr ${mm} min` : `${h} hr`;
-}
-// "in 1 hr 14 min · 14:32" style line, with a clean "Due now" past zero.
-function etaClockLine(d) {
-  if (!d) return "";
-  const m = Math.round((d.getTime() - Date.now()) / 60000);
-  return m <= 0 ? `Due now · ${fmtClock(d)}` : `in ${etaHM(d)} · ${fmtClock(d)}`;
 }
 
 // ---------- v2 field extraction ----------
@@ -892,8 +878,7 @@ function renderTrain(svc) {
   const originDep = stops[0].temporalData && stops[0].temporalData.departure;
   const originBooked = bookedTime(originDep);
   const originLive = bestTime(originDep);
-  const originLate = originBooked && originLive && Math.abs(originBooked - originLive) >= 60000;
-  const dueHtml = schedExpHtml(originBooked, originLive, originLate);
+  const dueHtml = schedExpHtml(originBooked, originLive);
 
   // Where the train is right now.
   let posLine;
@@ -943,42 +928,36 @@ function renderTrain(svc) {
     html += `<div class="delay-banner delay-warn">⚡ This train divides${where} — portions go to ${parts}. Check which part you need.</div>`;
   }
 
-  // "Your stop" banner (if the user has tapped a stop to track).
+  // The hero board: the user's chosen stop is the headline when they've picked
+  // one and it's still ahead; otherwise the next stop takes the slot.
   const myCrs = locked.myStopCrs;
-  if (myCrs) {
-    const mi = stops.findIndex((s) => stopCrs(s) === myCrs);
-    if (mi >= 0) {
-      const myStop = stops[mi];
-      const myEta = bestTime((myStop.temporalData && (myStop.temporalData.arrival || myStop.temporalData.departure)) || null);
-      if (arrived || mi < nextIdx) {
-        html += `<div class="yourstop done">
-          <div class="ys-l1"><span class="ys-label">PASSED</span> ${esc(locName(myStop))}</div>
-          <div class="ys-l2">Tap to clear</div>
-        </div>`;
-      } else if (mi === nextIdx) {
-        html += `<div class="yourstop now">
-          <div class="ys-l1"><span class="ys-label">GET OFF NEXT</span> ${esc(locName(myStop))}</div>
-          <div class="ys-l2">${etaClockLine(myEta)}</div>
-        </div>`;
-      } else {
-        html += `<div class="yourstop">
-          <div class="ys-l1"><span class="ys-label">YOUR STOP</span> ${esc(locName(myStop))}</div>
-          <div class="ys-l2">${etaClockLine(myEta)}</div>
-        </div>`;
-      }
+  const myIdx = myCrs ? stops.findIndex((s) => stopCrs(s) === myCrs) : -1;
+  const myActive = myIdx >= 0 && !arrived && myIdx >= nextIdx;
+
+  if (myActive) {
+    const kind = myIdx === nextIdx ? "getoff" : "yourstop";
+    html += stopHero(stops[myIdx], kind, myIdx === finalIdx);
+    if (myIdx !== nextIdx) {
+      // Next stop demoted to a quiet, still-tappable line (it's general info now).
+      const nArr = bestTime((next.temporalData && (next.temporalData.arrival || next.temporalData.departure)) || null);
+      html += `<div class="nextline" data-crs="${esc(stopCrs(next))}">
+        <span><span class="nl-label">Next stop</span> ${esc(locName(next))}</span>
+        <span class="nl-eta">${etaHM(nArr) || "—"}</span>
+      </div>`;
     }
   } else if (!arrived) {
-    html += `<div class="hint-tap">Tap a stop below to track when to get off.</div>`;
+    html += stopHero(next, nextIdx === finalIdx ? "final" : "next", nextIdx === finalIdx);
+    html += `<div class="hint-tap">Tap your stop below to track when to get off.</div>`;
   }
 
-  if (!arrived) {
-    if (nextIdx === finalIdx) {
-      html += stopBlock("FINAL DESTINATION", final, true, myCrs, nextIdx === formationIdx);
-    } else {
-      html += stopBlock("NEXT STOP", next, false, myCrs, nextIdx === formationIdx);
-      html += `<div class="screen-title" style="margin-top:6px">Then calling at</div>`;
-      for (let i = nextIdx + 1; i <= finalIdx; i++) html += stopRow(stops[i], i === finalIdx, myCrs, i === formationIdx);
-    }
+  // If the chosen stop is already behind us, collapse it to a small clear-me line.
+  if (myIdx >= 0 && (arrived || myIdx < nextIdx)) {
+    html += `<div class="passed-note" data-crs="${esc(myCrs)}">Passed ${esc(locName(stops[myIdx]))} · tap to clear</div>`;
+  }
+
+  if (!arrived && finalIdx > nextIdx) {
+    html += `<div class="screen-title" style="margin-top:16px">Then calling at</div>`;
+    for (let i = nextIdx + 1; i <= finalIdx; i++) html += stopRow(stops[i], i === finalIdx, myCrs, i === formationIdx);
   }
 
   html += `<button class="btn btn-wide refresh-btn" id="refresh-now" data-agent-target="refresh-train">↻ REFRESH</button>`;
@@ -1006,8 +985,6 @@ function renderTrain(svc) {
   $screen.querySelectorAll("[data-crs]").forEach((el) => {
     el.onclick = () => setMyStop(el.getAttribute("data-crs"));
   });
-  const ys = $screen.querySelector(".yourstop");
-  if (ys) ys.onclick = () => setMyStop(locked.myStopCrs);
   bindPinStars();
 }
 
@@ -1075,37 +1052,37 @@ function splitJoinBadgeHtml(stop, isFormationChange) {
   return `<div class="split-note">⚡ Train divides/joins here — check which part you need</div>`;
 }
 
-// Labelled scheduled/expected pair, shared by stopBlock and stopRow so the
-// two times are never ambiguous about which is which. Severity (color +
-// icon) scales with how late, so the badge isn't a color-only signal.
-function schedExpHtml(booked, arr, showBoth) {
-  if (!showBoth) return `${fmtClock(booked || arr)}`;
-  const min = booked && arr ? Math.round((arr - booked) / 60000) : 0;
-  const sev = delaySeverity(min);
-  return `<span class="time-label">SCH</span> <span class="strike">${fmtClock(booked)}</span> ` +
-    `<span class="time-label ${sev}">EXP</span> <span class="${severityBadgeClass(sev)}">${severityIcon(sev)} ${fmtClock(arr)}</span>`;
+// One stop's timing with no arithmetic: "On time · 14:26", or scheduled and
+// expected both shown plainly ("Sched 14:26 → Exp 14:29") when they differ.
+function schedExpHtml(booked, arr) {
+  if (!arr) return "";
+  const late = booked && (arr - booked) >= 60000;
+  if (!late) return `<span class="on-time">On time</span> · ${fmtClock(arr)}`;
+  return `Sched ${fmtClock(booked)} <span class="arrow">→</span> <span class="exp">Exp ${fmtClock(arr)}</span>`;
 }
 
-function stopBlock(label, stop, isFinal, myCrs, isFormationChange) {
+// The hero board: the one stop the user most cares about, rendered like the
+// train's own LED display. kind: "yourstop" | "getoff" | "next" | "final".
+function stopHero(stop, kind, isFinal) {
   const td = stop.temporalData || {};
-  const tdArr = td.arrival || td.departure;       // intermediate/destination use arrival; origin uses departure
+  const tdArr = td.arrival || td.departure;
   const arr = bestTime(tdArr);
   const booked = bookedTime(tdArr);
   const plat = platformOf(stop.locationMetadata);
-  const showBoth = booked && arr && Math.abs(booked - arr) >= 60000;
-  const crs = stopCrs(stop);
-  const mine = crs && crs === myCrs ? " mine" : "";
-  return `<div class="stop${isFinal ? " final" : ""}${mine}" data-crs="${esc(crs)}">
-    <div class="stop-label">${label}${mine ? " · YOUR STOP" : ""}</div>
-    <div class="stop-head">
-      <span class="stop-name">${esc(locName(stop))}</span>
-      <span class="stop-eta">${etaText(arr)}</span>
-    </div>
-    <div class="stop-meta">
-      ${plat ? `<span class="stop-plat">Plat ${esc(plat)}</span>` : ""}
-      <span class="stop-time">${schedExpHtml(booked, arr, showBoth)}</span>
-    </div>
-    ${splitJoinBadgeHtml(stop, isFormationChange)}
+  const lateMin = booked && arr ? Math.round((arr - booked) / 60000) : 0;
+  const late = lateMin >= 1;
+  const eyebrow = kind === "getoff" ? "GET OFF NEXT"
+    : kind === "yourstop" ? (isFinal ? "YOUR STOP · LAST STOP" : "YOUR STOP")
+    : isFinal ? "FINAL DESTINATION" : "NEXT STOP";
+  const status = late
+    ? `<div class="sh-status late">▲ ${lateMin} min late <small>· was due ${fmtClock(booked)}</small></div>`
+    : `<div class="sh-status ok">✓ On time</div>`;
+  return `<div class="stophero${kind === "getoff" ? " is-now" : ""}${late ? " is-late" : ""}${isFinal ? " is-final" : ""}" data-crs="${esc(stopCrs(stop))}">
+    <div class="sh-eye">${eyebrow}</div>
+    <div class="sh-name">${esc(locName(stop))}</div>
+    <div class="sh-when"><span>ETA</span><b>${etaHM(arr) || "—"}</b></div>
+    <div class="sh-meta"><span class="sh-arr">Arrives ${fmtClock(arr)}</span>${plat ? `<span class="sh-plat">Plat ${esc(plat)}</span>` : ""}</div>
+    ${status}
   </div>`;
 }
 
@@ -1115,7 +1092,6 @@ function stopRow(stop, isFinal, myCrs, isFormationChange) {
   const tdArr = td.arrival || td.departure;
   const arr = bestTime(tdArr);
   const booked = bookedTime(tdArr);
-  const showBoth = booked && arr && Math.abs(booked - arr) >= 60000;
   const plat = platformOf(stop.locationMetadata);
   const crs = stopCrs(stop);
   const mine = crs && crs === myCrs ? " mine" : "";
@@ -1127,8 +1103,8 @@ function stopRow(stop, isFinal, myCrs, isFormationChange) {
   return `<div class="stoprow${isFinal ? " final" : ""}${mine}" data-crs="${esc(crs)}">
     <span class="sr-name${sizeClass}">${esc(name)}${isFinal ? ` <span class="sr-dest">DEST</span>` : ""}${mine ? ` <span class="sr-dest">YOUR STOP</span>` : ""}</span>
     <span class="sr-right">
-      <span class="sr-eta">${etaText(arr)}</span>
-      <span class="sr-time">${schedExpHtml(booked, arr, showBoth)}${plat ? ` · P${esc(plat)}` : ""}</span>
+      <span class="sr-eta">${etaHM(arr) || "—"}</span>
+      <span class="sr-time">${schedExpHtml(booked, arr)}${plat ? ` · P${esc(plat)}` : ""}</span>
     </span>
     ${splitJoinBadgeHtml(stop, isFormationChange)}
   </div>`;
