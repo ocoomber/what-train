@@ -162,6 +162,23 @@ function setStatus(text, kind) {
 function setBusy(busy) {
   $screen.setAttribute("aria-busy", busy ? "true" : "false");
 }
+// Immediate feedback for a refresh-type button: the moment it's tapped, spin its
+// icon and show a "working" label, then run the action. The fetch that follows
+// is silent and only redraws when it lands (slow on poor signal), so without
+// this the tap looks like it did nothing. The button is replaced on re-render,
+// so the busy state clears itself. Pass the button id, the working label, and
+// the action. Markup must wrap the icon as .btn-ico and the text as .btn-label.
+function busyTap(id, workingLabel, action) {
+  const btn = document.getElementById(id);
+  if (!btn) return;
+  btn.onclick = () => {
+    btn.classList.add("is-busy");
+    btn.setAttribute("aria-busy", "true");
+    const label = btn.querySelector(".btn-label");
+    if (label) label.textContent = workingLabel;
+    action();
+  };
+}
 function compass(deg) { return ["N", "NE", "E", "SE", "S", "SW", "W", "NW"][Math.round(deg / 45) % 8]; }
 function updateSpeedReadout() {
   if (lastFix) $speed.textContent = `${Math.round(speedMph)} mph${bearing == null ? "" : " " + compass(bearing)}`;
@@ -568,13 +585,13 @@ function renderStation(station, services, distance) {
   $screen.innerHTML =
     `<div class="screen-title">${heading}</div>${cards}` +
     `<div class="btn-row" style="margin-top:6px">
-       <button class="btn" id="reload-board" data-agent-target="reload-board">↻ RELOAD</button>
+       <button class="btn" id="reload-board" data-agent-target="reload-board"><span class="btn-ico">↻</span> <span class="btn-label">RELOAD</span></button>
        <button class="btn" id="nearby" data-agent-target="nearby-stations">NEARBY STATIONS →</button>
      </div>` +
     (pinnedTrains.length ? `<button class="link-btn" id="pinned-link" data-agent-target="pinned-trains">⭐ Pinned trains (${pinnedTrains.length})</button>` : "");
   setBusy(false);
   bindCards(() => renderStation(station, services, distance));
-  document.getElementById("reload-board").onclick = () => enterStation(station, distance);
+  busyTap("reload-board", "RELOADING…", () => enterStation(station, distance));
   document.getElementById("nearby").onclick = () => { pushNav(() => renderStation(station, services, distance)); renderNearbyStations(); };
   const pl = document.getElementById("pinned-link");
   if (pl) pl.onclick = () => { pushNav(() => renderStation(station, services, distance)); renderPinned(); };
@@ -762,13 +779,13 @@ function renderFallbackList(station, services) {
   $screen.innerHTML =
     `<div class="screen-title">Tap the train you're on (${esc(station.c)})</div>${cards}` +
     `<div class="btn-row" style="margin-top:6px">
-       <button class="btn" id="rescan" data-agent-target="rescan">↻ RE-SCAN</button>
+       <button class="btn" id="rescan" data-agent-target="rescan"><span class="btn-ico">↻</span> <span class="btn-label">RE-SCAN</span></button>
        <button class="btn" id="nearby" data-agent-target="nearby-stations">NEARBY STATIONS →</button>
      </div>` +
     (pinnedTrains.length ? `<button class="link-btn" id="pinned-link" data-agent-target="pinned-trains">⭐ Pinned trains (${pinnedTrains.length})</button>` : "");
   setBusy(false);
   bindCards(() => renderFallbackList(station, services));
-  document.getElementById("rescan").onclick = enterMoving;
+  busyTap("rescan", "RE-SCANNING…", enterMoving);
   document.getElementById("nearby").onclick = () => { pushNav(() => renderFallbackList(station, services)); renderNearbyStations(); };
   const pl = document.getElementById("pinned-link");
   if (pl) pl.onclick = () => { pushNav(() => renderFallbackList(station, services)); renderPinned(); };
@@ -969,7 +986,7 @@ function renderTrain(svc) {
     for (let i = nextIdx + 1; i <= finalIdx; i++) html += stopRow(stops[i], i === finalIdx, myCrs, i === formationIdx);
   }
 
-  html += `<button class="btn btn-wide refresh-btn" id="refresh-now" data-agent-target="refresh-train">↻ REFRESH</button>`;
+  html += `<button class="btn btn-wide refresh-btn" id="refresh-now" data-agent-target="refresh-train"><span class="btn-ico">↻</span> <span class="btn-label">REFRESH</span></button>`;
   const ago = lastLoadedAt ? Math.round((Date.now() - lastLoadedAt) / 60000) : 0;
   const agoTxt = !lastLoadedAt ? "now" : (ago <= 0 ? "just now" : `${ago} min ago`);
   html += `<div class="updated-note${staleMsg ? " warn" : ""}">${staleMsg ? esc(staleMsg) + " · " : "Updated "}${staleMsg ? "" : agoTxt + " · "}auto-refresh 60s</div>`;
@@ -984,7 +1001,7 @@ function renderTrain(svc) {
 
   $screen.innerHTML = html;
   setBusy(false);
-  document.getElementById("refresh-now").onclick = () => loadService(false);
+  busyTap("refresh-now", "REFRESHING…", () => loadService(false));
   document.getElementById("forget").onclick = forgetTrain;
   const qr = document.getElementById("qr");
   if (qr) qr.onclick = () => { pushNav(() => renderTrain(svc)); renderQR(); };
