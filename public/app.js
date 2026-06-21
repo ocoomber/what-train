@@ -922,11 +922,6 @@ function renderTrain(svc) {
   // know which part of the train to be in well in advance.
   const splitDests = (svc.destination || []).length > 1 ? svc.destination : null;
   const formationIdx = formationChangeIdx(stops, nextIdx);
-  if (!arrived && splitDests) {
-    const where = formationIdx >= 0 ? ` at ${esc(locName(stops[formationIdx]))}` : "";
-    const parts = splitDests.map((d) => `${esc(d.location && d.location.description)} (${fmtClock(bestTime(d.temporalData))})`).join(" and ");
-    html += `<div class="delay-banner delay-warn">⚡ This train divides${where} — portions go to ${parts}. Check which part you need.</div>`;
-  }
 
   // The hero board: the user's chosen stop is the headline when they've picked
   // one and it's still ahead; otherwise the next stop takes the slot.
@@ -934,9 +929,23 @@ function renderTrain(svc) {
   const myIdx = myCrs ? stops.findIndex((s) => stopCrs(s) === myCrs) : -1;
   const myActive = myIdx >= 0 && !arrived && myIdx >= nextIdx;
 
+  // A divide that happens at or before the user's stop is the actionable case:
+  // they must be in the right portion. When it applies we show a stop-specific
+  // alert in the hero instead of the generic whole-journey divide banner.
+  const splitBeforeMyStop = myActive && splitDests && formationIdx >= nextIdx && formationIdx <= myIdx;
+
+  if (!arrived && splitDests && !splitBeforeMyStop) {
+    const where = formationIdx >= 0 ? ` at ${esc(locName(stops[formationIdx]))}` : "";
+    const parts = splitDests.map((d) => `${esc(d.location && d.location.description)} (${fmtClock(bestTime(d.temporalData))})`).join(" and ");
+    html += `<div class="delay-banner delay-warn">⚡ This train divides${where} — portions go to ${parts}. Check which part you need.</div>`;
+  }
+
   if (myActive) {
     const kind = myIdx === nextIdx ? "getoff" : "yourstop";
     html += stopHero(stops[myIdx], kind, myIdx === finalIdx);
+    if (splitBeforeMyStop) {
+      html += `<div class="stop-alert">⚡ This train divides at ${esc(locName(stops[formationIdx]))} before your stop — make sure you're in the right part of the train.</div>`;
+    }
     if (myIdx !== nextIdx) {
       // Next stop demoted to a quiet, still-tappable line (it's general info now).
       const nArr = bestTime((next.temporalData && (next.temporalData.arrival || next.temporalData.departure)) || null);
@@ -1075,14 +1084,17 @@ function stopHero(stop, kind, isFinal) {
     : kind === "yourstop" ? (isFinal ? "YOUR STOP · LAST STOP" : "YOUR STOP")
     : isFinal ? "FINAL DESTINATION" : "NEXT STOP";
   const status = late
-    ? `<div class="sh-status late">▲ ${lateMin} min late <small>· was due ${fmtClock(booked)}</small></div>`
+    ? `<div class="sh-status late">▲ ${lateMin} min late</div>`
     : `<div class="sh-status ok">✓ On time</div>`;
+  const arrives = late ? `Arrives ${fmtClock(arr)} · was ${fmtClock(booked)}` : `Arrives ${fmtClock(arr)}`;
   return `<div class="stophero${kind === "getoff" ? " is-now" : ""}${late ? " is-late" : ""}${isFinal ? " is-final" : ""}" data-crs="${esc(stopCrs(stop))}">
     <div class="sh-eye">${eyebrow}</div>
     <div class="sh-name">${esc(locName(stop))}</div>
-    <div class="sh-when"><span>ETA</span><b>${etaHM(arr) || "—"}</b></div>
-    <div class="sh-meta"><span class="sh-arr">Arrives ${fmtClock(arr)}</span>${plat ? `<span class="sh-plat">Plat ${esc(plat)}</span>` : ""}</div>
-    ${status}
+    <div class="sh-when">
+      <span class="sh-when-eta"><span class="sh-eta-lbl">ETA</span> <b>${etaHM(arr) || "—"}</b></span>
+      ${status}
+    </div>
+    <div class="sh-meta"><span class="sh-arr">${arrives}</span>${plat ? `<span class="sh-plat">Plat ${esc(plat)}</span>` : ""}</div>
   </div>`;
 }
 
