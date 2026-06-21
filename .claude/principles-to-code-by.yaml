@@ -1,0 +1,127 @@
+# Principles To Code By
+# Loaded into every Claude Code session. Keep it lean; this costs tokens every time.
+#
+# Two phases:
+#   PHASE 1 (this file) — how to build, loaded always.
+#   PHASE 2 (pre-ship-checklist.yaml) — the deep refactor, loaded only when the
+#           owner runs /ship-check to say "I think this is finished."
+#
+# HOW TO INSTALL IN A NEW PROJECT
+#   1. Copy the whole .claude/ folder into the new project.
+#   2. In that project's CLAUDE.md add one line:  @import .claude/principles-to-code-by.yaml
+#      (or just paste this file's contents in). That makes it load every session.
+#   Acronyms (URL, CSS, ARIA, WCAG, JSON, LLM) are written plainly here; they are
+#   standard web terms, defined once is enough.
+
+phase: 1 (build)
+intent: >
+  Build fast, but lay a machine-readable foundation so the Phase 2 refactor is a
+  tidy-up, not a teardown. Everything here is cheap to do now and expensive to
+  retrofit later. That is the only reason it earns space in context.
+
+# --- THE ONE IDEA ---
+# A page serves two audiences: humans who need visual structure, and machines
+# (search engines, AI agents, screen readers, and future-Claude reading its own
+# pages) that do not. Build the machine-readable layer first, then make it pretty
+# on top. Never the reverse.
+
+build_phase_habits:
+
+  # Cheap now, painful later. Do these from line one.
+
+  - structure_first: >
+      Reach for the meaningful element before the generic one: button, nav, main,
+      dialog, table, form, label. A styled div pretending to be a button is debt.
+
+  - name_every_control: >
+      Every input gets a label (label for=, or aria-label if there is no visible
+      one). Every input gets a specific type (email, tel, number), not a bare text
+      default. This is the difference between an agent filling a form and guessing.
+
+  - stable_agent_targets: >
+      Anything an agent might click or fill carries data-agent-target with a
+      purpose-based, kebab-case value (e.g. submit-invoice). Tie it to function,
+      not position or style, so restyling never breaks it.
+
+  - state_in_the_dom: >
+      If something is loading, open, or in error, say so in the markup as you build
+      it, not as an afterthought: aria-busy while loading, aria-expanded for
+      toggles, aria-invalid on bad input. Retrofitting these means re-reading every
+      component.
+
+  - data_then_decoration: >
+      Where a route serves data, keep the data path clean enough that returning
+      JSON later is a small change, not a rewrite. You need not implement content
+      negotiation now; just do not tangle data and markup so tightly that splitting
+      them later is surgery.
+
+machine_readable_metadata:
+
+  # Also cheap now, and the single biggest machine-readability win for a public
+  # page. Do these as you build each page.
+
+  - head_basics: >
+      Every page gets a meaningful <title>, a meta description, and Open Graph tags
+      (og:title, og:description, og:url, og:type, og:site_name). This is the
+      metadata layer every machine reads first. og:image is OPTIONAL: only add one
+      if it is a deliberate brand asset (a logo or made-for-sharing card). Never
+      point og:image at a random photo/still — a text-only share card is better
+      than an off-brand image, and a content still makes a professional site look
+      like consumer content when shared.
+
+  - structured_data: >
+      Add a JSON-LD (schema.org) block in <head> describing what the page is
+      (Organization, WebSite, Article, Product, etc.). Costs nothing, and it is how
+      search engines and agents understand the page's meaning, not just its words.
+
+  - llms_txt_stub: >
+      From day one, keep a /llms.txt file at the site root: a short plain-text
+      summary of what the site is, its key pages, and what it can do. Start as a
+      stub and grow it. It is the file an LLM looks for to orient itself.
+
+build_phase_freedoms:
+
+  # Explicitly NOT your concern yet. Spending tokens enforcing these now is waste.
+
+  - Visual design, layout, animation, and CSS framework choice are entirely yours.
+    Be as expressive as you like.
+  - No formal accessibility audit yet (the named habits above are the floor).
+  - No content-negotiation contract, no 406 handling, no automated snapshot tests.
+  - Perfect ARIA coverage is not required.
+
+# ---------------------------------------------------------------------------
+# HOW CLAUDE MUST WORK (the most important section for a non-coding owner)
+# ---------------------------------------------------------------------------
+# The owner does not read code. Principles alone are weak — they can be skipped
+# silently and nothing visibly breaks. So these behaviour rules are the real
+# safety net. They are not optional.
+claude_behaviour:
+
+  - plain_english_notes: >
+      End every task with a short plain-English note, no jargon, covering three
+      things: (1) what you changed, (2) what could break or what to watch, (3) what
+      you did NOT check or were unsure about.
+
+  - verify_before_claiming: >
+      Never say something is "done" or "works" unless you actually checked it
+      (loaded the page, ran the command, looked at the output). State HOW you
+      verified it. "I changed it" is not "I confirmed it works."
+
+  - flag_guesses: >
+      When you are guessing, assuming, or unsure, say so out loud. A flagged guess
+      is useful; a confident wrong answer the owner cannot catch is dangerous.
+
+  - smallest_safe_change: >
+      Prefer the smallest change that does the job. Do not refactor, rename, or
+      "tidy" beyond what was asked during the build phase — that is what /ship-check
+      is for.
+
+handoff_to_phase_2: >
+  When the owner decides a project is finished, they run /ship-check. That loads
+  pre-ship-checklist.yaml and does the deep pass: removes development smells,
+  verifies the build habits actually landed, and runs the audit checks — pasting
+  the evidence so the owner can see it really happened. Because the habits above
+  were kept during the build, that step tightens existing structure rather than
+  rebuilding it.
+
+# END OF principles-to-code-by.yaml

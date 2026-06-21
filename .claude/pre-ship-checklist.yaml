@@ -1,0 +1,127 @@
+# Pre-Ship Checklist
+# PHASE 2. Loads only when the owner runs /ship-check, never in routine sessions.
+#
+# This is the "get really stuck in" pass. The owner has decided the project is
+# finished and wants the code cleaned up and verified. Two jobs:
+#   1. HUNT AND REMOVE development smells (the mess that builds up while building).
+#   2. VERIFY the Phase 1 build habits actually landed, and run the audit checks.
+#
+# It is written as a diff against Phase 1: it assumes the build habits are already
+# in the code and adds the audit, cleanup, and proof layer on top.
+
+phase: 2 (pre-ship)
+
+assumes:
+  - Semantic elements used over generic ones.
+  - Every control has an accessible name and a specific input type.
+  - Interactive elements carry stable data-agent-target values.
+  - Loading, open, and error states are reflected in the markup.
+  - Pages have title, meta, Open Graph tags, and a JSON-LD block.
+  - The data path is untangled from the markup.
+
+intent: >
+  Verify and tighten what the build phase laid down, and clear out the smells.
+  If a check forces a full rebuild, that is a Phase 1 habit that was skipped; fix
+  it at the source, do not paper over it here.
+
+# ---------------------------------------------------------------------------
+# THE GOLDEN RULE OF THIS PASS (owner does not read code)
+# ---------------------------------------------------------------------------
+# For EVERY check below, do not just assert it passed. RUN it and PASTE the
+# evidence into the chat (the grep output, the file contents, the audit result),
+# then give a one-line plain-English verdict. A bare "done" is not acceptable —
+# the owner cannot read the code, so the proof is the chat output.
+proof_rule: run_each_check_and_paste_the_evidence_then_a_plain_english_verdict
+
+# ---------------------------------------------------------------------------
+# STEP 1 — DETECT THE PROJECT TYPE (decides which checks apply)
+# ---------------------------------------------------------------------------
+detect:
+  static_site: >
+    No server you control: plain HTML/CSS/JS served as files (e.g. GitHub Pages).
+    Run the "always" checks. SKIP the server-only checks.
+  has_server: >
+    There is a backend, API, or edge/serverless functions you control.
+    Run the "always" checks AND the server-only checks.
+
+# ---------------------------------------------------------------------------
+# STEP 2 — SMELL HUNT (the "really stuck in" cleanup)
+# ---------------------------------------------------------------------------
+smell_hunt:
+  look_for:
+    - Dead code and unused functions.
+    - Leftover test/preview/redesign files that served their purpose.
+    - Commented-out blocks left "just in case".
+    - Duplicated markup that should be shared or templated.
+    - Hardcoded values (colours, sizes, URLs) that should be variables/constants.
+    - Inconsistent or unclear naming.
+    - Unused images, CSS rules, or scripts.
+  action: >
+    Propose the cleanup, show the owner what you would remove and why in plain
+    English, then refactor. When in doubt about deleting something, ask first —
+    never silently delete work the owner may still want.
+
+# ---------------------------------------------------------------------------
+# STEP 3 — CHECKS THAT ALWAYS APPLY (static OR server)
+# ---------------------------------------------------------------------------
+checks_always:
+
+  - id: semantic_html
+    check: "Real semantic elements are used, not divs pretending to be controls."
+    prove: "List any non-semantic stand-ins found, or confirm none."
+
+  - id: accessibility
+    check: "WCAG 2.2 AA basics: colour contrast, visible focus, target sizes, every control named."
+    prove: "Run an accessibility audit; paste the result and any blocking issues."
+
+  - id: state_and_forms
+    check: >
+      Every loading/open/error visual state carries its attribute (aria-busy,
+      aria-expanded, aria-invalid). Every invalid input has an associated error
+      message, not colour alone.
+    prove: "List each stateful element and whether its attribute is present."
+
+  - id: agent_target_stability
+    check: "data-agent-target values are present and purpose-based; none removed/renamed without reason."
+    prove: "Paste the list of all data-agent-target values found."
+
+  - id: machine_readable_metadata
+    check: "Every page has title, meta description, Open Graph tags, and a JSON-LD block."
+    prove: "Per page, paste which of the four are present/missing."
+
+  - id: llms_txt
+    check: "/llms.txt exists at the site root and is non-empty and accurate."
+    prove: "Paste the contents of /llms.txt."
+
+# ---------------------------------------------------------------------------
+# STEP 4 — SERVER-ONLY CHECKS (skip entirely for a static site)
+# ---------------------------------------------------------------------------
+checks_server_only:
+
+  - id: content_negotiation
+    check: >
+      Each data route serves machine data and human UI from the same URL, chosen
+      by the request's Accept header: application/json returns JSON, text/html
+      returns the UI, an unsupported value returns HTTP 406 listing the types.
+    prove: "Request each route with both Accept values and a junk value; paste the three responses."
+
+  - id: openapi
+    check: "Where a structured API is exposed, /openapi.json describes the endpoints and validates."
+    prove: "Paste validation result, or state no structured API is exposed."
+
+# ---------------------------------------------------------------------------
+# FINISH — REPORT TO THE OWNER
+# ---------------------------------------------------------------------------
+final_report:
+  format: plain_english
+  must_cover:
+    - What was cleaned up / removed (and why).
+    - Which checks passed, with the evidence shown above.
+    - Which checks failed or were skipped, and what that means in practice.
+    - Anything that needs the owner's decision before going live.
+  precedence: >
+    Where a CSS framework's default markup conflicts with a check, the check wins:
+    override the framework, do not waive the rule. If a check genuinely cannot pass
+    on this project type, say so plainly — do not silently mark it done.
+
+# END OF pre-ship-checklist.yaml
