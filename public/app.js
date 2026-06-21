@@ -176,7 +176,10 @@ function busyTap(id, workingLabel, action) {
     btn.setAttribute("aria-busy", "true");
     const label = btn.querySelector(".btn-label");
     if (label) label.textContent = workingLabel;
-    action();
+    // Hold the spin for a beat before acting, so a fast (cached / good-signal)
+    // response still shows a clean ~half-second spin instead of a flicker that
+    // reads as a glitch. Double-tap is already blocked by pointer-events: none.
+    setTimeout(action, 500);
   };
 }
 function compass(deg) { return ["N", "NE", "E", "SE", "S", "SW", "W", "NW"][Math.round(deg / 45) % 8]; }
