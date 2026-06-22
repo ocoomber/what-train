@@ -912,7 +912,7 @@ function renderTrain(svc) {
     const st = next.temporalData && next.temporalData.status;
     posLine = (st === "AT_PLATFORM" || st === "ARRIVING")
       ? `At ${esc(locName(next))}`
-      : `Left ${esc(locName(stops[lastDeparted]))} · heading to ${esc(locName(next))}`;
+      : legProgressHtml(stops[lastDeparted], next);
   }
 
   let html = `<div class="train-head">
@@ -1060,6 +1060,30 @@ function renderQR() {
 
 function locName(stop) {
   return (stop.location && (stop.location.description || (stop.location.shortCodes && stop.location.shortCodes[0]))) || "—";
+}
+
+// Short label for the progress bar: the 3-letter CRS if we have one,
+// else the first 3 letters of the name — keeps both ends on one line.
+function shortCode(stop) {
+  return (stopCrs(stop) || locName(stop).slice(0, 3)).toUpperCase();
+}
+
+// "Left A, heading to B" rendered as a track with a train icon positioned
+// by elapsed time between A's departure and B's best arrival/departure time,
+// instead of just naming both ends.
+function legProgressHtml(from, to) {
+  const dep = bestTime(from.temporalData && from.temporalData.departure);
+  const arr = bestTime((to.temporalData && (to.temporalData.arrival || to.temporalData.departure)) || null);
+  let pct = 50;
+  if (dep && arr && arr > dep) {
+    pct = ((Date.now() - dep.getTime()) / (arr.getTime() - dep.getTime())) * 100;
+    pct = Math.max(4, Math.min(96, pct));
+  }
+  return `<div class="train-progress">
+      <span class="tp-code">${esc(shortCode(from))}</span>
+      <div class="tp-track"><div class="tp-fill" style="width:${pct}%"></div><span class="tp-train" style="left:${pct}%">🚆</span></div>
+      <span class="tp-code">${esc(shortCode(to))}</span>
+    </div>`;
 }
 
 // Each calling point can carry locationMetadata.numberOfVehicles (confirmed
