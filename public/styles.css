@@ -331,6 +331,39 @@ body {
   color: var(--fg);
   margin: 0 0 14px;
 }
+.train-progress {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.tp-code {
+  font-family: var(--num);
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--fg-dim);
+  flex: 0 0 auto;
+}
+.tp-track {
+  position: relative;
+  flex: 1 1 auto;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--panel-edge);
+}
+.tp-fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  height: 100%;
+  border-radius: 2px;
+  background: var(--accent);
+}
+.tp-train {
+  position: absolute;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  font-size: 18px;
+  line-height: 1;
+}
 .auto-note {
   font-size: 13px;
   color: var(--fg-dim);
