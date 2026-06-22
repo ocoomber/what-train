@@ -1,8 +1,9 @@
 # CLAUDE.md
 
-This repo deploys straight from `main` with no separate release branch — when
-asked to ship a feature branch, merge it into `main` and push once it's
-verified working.
+This repo deploys straight from `main` with no separate release branch —
+always merge finished work into `main` and push it there (not just the
+feature branch) so the user can test on their phone, without waiting to be
+asked.
 
 ## Project overview
 
