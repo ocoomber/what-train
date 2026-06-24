@@ -240,6 +240,11 @@ body {
 .btn-no { color: var(--fg-dim); }
 .btn-wide { width: 100%; }
 
+/* Compact board toolbar (Reload / Nearby) — kept at the top so it's reachable
+   without scrolling past a long departures list. */
+.board-tools { display: flex; gap: 10px; margin: 0 0 12px; }
+.btn-compact { font-size: 14px; padding: 10px 12px; border-width: 1px; border-radius: 10px; }
+
 /* ---- confirmed train (state 3) ---- */
 .train-head {
   display: flex; justify-content: space-between; align-items: flex-start;
