@@ -586,11 +586,12 @@ function renderStation(station, services, distance) {
     ? services.map(departureCard).join("")
     : `<div class="notice"><div class="big">No trains listed right now</div><div class="sub">Try Reload — it may just be a quiet moment.</div></div>`;
   $screen.innerHTML =
-    `<div class="screen-title">${heading}</div>${cards}` +
-    `<div class="btn-row" style="margin-top:6px">
-       <button class="btn" id="reload-board" data-agent-target="reload-board"><span class="btn-ico">↻</span> <span class="btn-label">RELOAD</span></button>
-       <button class="btn" id="nearby" data-agent-target="nearby-stations">NEARBY STATIONS →</button>
+    `<div class="screen-title">${heading}</div>` +
+    `<div class="board-tools">
+       <button class="btn btn-compact" id="reload-board" data-agent-target="reload-board"><span class="btn-ico">↻</span> <span class="btn-label">RELOAD</span></button>
+       <button class="btn btn-compact" id="nearby" data-agent-target="nearby-stations">STATIONS →</button>
      </div>` +
+    cards +
     (pinnedTrains.length ? `<button class="link-btn" id="pinned-link" data-agent-target="pinned-trains">⭐ Pinned trains (${pinnedTrains.length})</button>` : "");
   setBusy(false);
   bindCards(() => renderStation(station, services, distance));
@@ -1288,7 +1289,7 @@ async function boot() {
     showOfflineFallback();
   } else {
     setStatus("STARTING", "");
-    renderNotice("GETTING GPS", "Allow location to find your train.", true, false, false, true);
+    renderNotice("GETTING LOCATION", "Allow location to find your train.", true, false, false, true);
   }
 
   // Fetch the station list in parallel with GPS acquisition below — on a slow
