@@ -885,6 +885,12 @@ function renderTrain(svc) {
   const nextIdx = arrived ? finalIdx : Math.min(lastDeparted + 1, finalIdx);
   const next = stops[nextIdx];
 
+  // Is the train sitting at the "next" stop right now (boarding, not yet
+  // departed)? If so that stop is really the CURRENT stop, and its meaningful
+  // time is its departure — calling it "next stop · ETA" misleads.
+  const nextStatus = next.temporalData && next.temporalData.status;
+  const atNext = !arrived && (nextStatus === "AT_PLATFORM" || (lastDeparted < 0 && nextIdx === 0));
+
   const probeTd = (next.temporalData && (next.temporalData.arrival || next.temporalData.departure)) || null;
   const delayMin = latenessMin(probeTd);
   const reasons = svc.reasons && svc.reasons[0];
@@ -965,7 +971,7 @@ function renderTrain(svc) {
 
   if (myActive) {
     const kind = myIdx === nextIdx ? "getoff" : "yourstop";
-    html += stopHero(stops[myIdx], kind, myIdx === finalIdx);
+    html += stopHero(stops[myIdx], kind, myIdx === finalIdx, myIdx === nextIdx && atNext);
     if (splitBeforeMyStop) {
       html += `<div class="stop-alert">⚡ This train divides at ${esc(locName(stops[formationIdx]))} before your stop — make sure you're in the right part of the train.</div>`;
     }
@@ -978,7 +984,7 @@ function renderTrain(svc) {
       </div>`;
     }
   } else if (!arrived) {
-    html += stopHero(next, nextIdx === finalIdx ? "final" : "next", nextIdx === finalIdx);
+    html += stopHero(next, nextIdx === finalIdx ? "final" : "next", nextIdx === finalIdx, atNext);
     html += `<div class="hint-tap">Tap your stop below to track when to get off.</div>`;
   }
 
@@ -1121,29 +1127,37 @@ function schedExpHtml(booked, arr) {
 
 // The hero board: the one stop the user most cares about, rendered like the
 // train's own LED display. kind: "yourstop" | "getoff" | "next" | "final".
-function stopHero(stop, kind, isFinal) {
+function stopHero(stop, kind, isFinal, atStop) {
   const td = stop.temporalData || {};
-  const tdArr = td.arrival || td.departure;
-  const arr = bestTime(tdArr);
-  const booked = bookedTime(tdArr);
+  // Sitting at this stop → its departure is the meaningful time (arrival is
+  // already in the past); otherwise its arrival.
+  const tdT = atStop ? (td.departure || td.arrival) : (td.arrival || td.departure);
+  const arr = bestTime(tdT);
+  const booked = bookedTime(tdT);
   const plat = platformOf(stop.locationMetadata);
   const lateMin = booked && arr ? Math.round((arr - booked) / 60000) : 0;
   const late = lateMin >= 1;
-  const eyebrow = kind === "getoff" ? "GET OFF NEXT"
+  const eyebrow = atStop ? (kind === "getoff" ? "GET OFF HERE" : "AT THIS STOP")
+    : kind === "getoff" ? "GET OFF NEXT"
     : kind === "yourstop" ? (isFinal ? "YOUR LAST STOP" : "YOUR STOP")
     : isFinal ? "FINAL DESTINATION" : "NEXT STOP";
   const status = late
     ? `<div class="sh-status late">▲ ${lateMin} min late</div>`
     : `<div class="sh-status ok">✓ On time</div>`;
-  const arrives = late ? `Arrives ${fmtClock(arr)} · was ${fmtClock(booked)}` : `Arrives ${fmtClock(arr)}`;
+  // When boarding, the headline is when it leaves, not an ETA to arrive.
+  const whenLabel = atStop ? "DEPARTS" : "ETA";
+  const metaWord = atStop ? "Departs" : "Arrives";
+  let big = etaHM(arr) || "—";
+  if (atStop && big === "due") big = "now";
+  const meta = late ? `${metaWord} ${fmtClock(arr)} · was ${fmtClock(booked)}` : `${metaWord} ${fmtClock(arr)}`;
   return `<div class="stophero${kind === "getoff" ? " is-now" : ""}${late ? " is-late" : ""}${isFinal ? " is-final" : ""}" role="button" tabindex="0" data-crs="${esc(stopCrs(stop))}">
     <div class="sh-eye-row">
       <span class="sh-eye">${eyebrow}</span>
       ${status}
     </div>
     <div class="sh-name">${esc(locName(stop))}</div>
-    <div class="sh-when"><span class="sh-eta-lbl">ETA</span> <b>${etaHM(arr) || "—"}</b></div>
-    <div class="sh-meta"><span class="sh-arr">${arrives}</span>${plat ? `<span class="sh-plat">Plat ${esc(plat)}</span>` : ""}</div>
+    <div class="sh-when"><span class="sh-eta-lbl">${whenLabel}</span> <b>${big}</b></div>
+    <div class="sh-meta"><span class="sh-arr">${meta}</span>${plat ? `<span class="sh-plat">Plat ${esc(plat)}</span>` : ""}</div>
   </div>`;
 }
 
