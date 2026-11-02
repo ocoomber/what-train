@@ -24,6 +24,7 @@ const MOVING_MPH = 30;
 const STATION_RADIUS_M = 300;
 const DIRECTION_TOLERANCE = 70;
 const REFRESH_MS = 60000;
+const NEARBY_MAX = 40;
 
 const State = { ACQUIRING: "ACQUIRING", IDLE: "IDLE", STATION: "STATION", MOVING: "MOVING", CONFIRMED: "CONFIRMED" };
 let current = State.ACQUIRING;
@@ -47,6 +48,25 @@ let lastLoadedAt = 0;        // when fresh service data last arrived
 let staleMsg = "";           // set when a refresh failed but we kept the old data
 let pinnedStation = null;    // {crs, pos} when the user manually picked a nearby station
 let pinnedTrains = loadPinnedTrains(); // [{uid, op, dest, time}] — saved candidates for quick re-find
+
+// ---------- view/navigation state ----------
+// activeView drives the bottom tab highlight; manualView stops background GPS
+// from yanking the user out of a screen they deliberately opened. screenName
+// identifies the exact screen for auto-refresh guards.
+let activeView = "nearby";
+let manualView = null;       // "nearby" | "pinned" | "train" | null
+let screenName = "notice";
+let announceTimer = null;
+
+let lastStation = null;
+let lastDistance = null;
+let boardUpdatedAt = 0;
+let boardTimer = null;
+let stationLoading = false;
+let stationRequest = 0;
+let nearbyLimit = 8;
+let lastNearbyRender = 0;
+let stationsPromise = null;
 
 // Opportunistic RTT rate-limit tracking — RTT's spec doesn't document a
 // rate-limit header, so this only ever gets populated if the Worker actually
@@ -79,6 +99,32 @@ const $statusDot = document.getElementById("status-dot");
 const $speed = document.getElementById("speed-readout");
 const $backBtn = document.getElementById("back-btn");
 const $helpBtn = document.getElementById("help-btn");
+const $viewTitle = document.getElementById("view-title");
+
+function setActiveView(view) {
+  activeView = view;
+  document.querySelectorAll("#tabbar [data-nav]").forEach((btn) => {
+    const on = btn.dataset.nav === view;
+    btn.classList.toggle("active", on);
+    if (on) btn.setAttribute("aria-current", "page");
+    else btn.removeAttribute("aria-current");
+  });
+}
+
+function announce(text) {
+  const el = document.getElementById("announcer");
+  if (!el || !text) return;
+  el.textContent = "";
+  clearTimeout(announceTimer);
+  announceTimer = setTimeout(() => { el.textContent = text; }, 30);
+}
+
+function setViewTitle(text) {
+  const title = text || "My Train";
+  if (!$viewTitle || $viewTitle.textContent === title) return;
+  $viewTitle.textContent = title;
+  announce(title);
+}
 
 // ---------- in-app back navigation ----------
 // A standalone/full-screen PWA has no browser chrome back arrow, and the
@@ -98,7 +144,7 @@ function clearNav() {
   updateBackButton();
 }
 function updateBackButton() {
-  if ($backBtn) $backBtn.style.display = navStack.length ? "inline-block" : "none";
+  if ($backBtn) $backBtn.style.display = navStack.length ? "flex" : "none";
 }
 if ($backBtn) $backBtn.onclick = () => { if (navStack.length) history.back(); };
 window.addEventListener("popstate", () => {
@@ -153,7 +199,9 @@ function stationAhead(pos) {
 
 // ---------- status bar ----------
 function setStatus(text, kind) {
-  $statusText.textContent = text;
+  // Only touch the live region when the text actually changes, so the 2s
+  // Nearby re-render doesn't make a screen reader repeat "LOCATED".
+  if ($statusText.textContent !== text) $statusText.textContent = text;
   $statusDot.className = "dot" + (kind ? " " + kind : "");
 }
 // Reflect loading state in the DOM (aria-busy) so screen readers and agents
@@ -195,6 +243,17 @@ function parseTime(iso) {
 }
 function fmtClock(d) {
   return d ? `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}` : "--:--";
+}
+// Human age for "updated X ago" and location freshness notes.
+function agoText(ts) {
+  if (!ts) return "just now";
+  const s = Math.max(0, Math.round((Date.now() - ts) / 1000));
+  if (s < 15) return "just now";
+  if (s < 60) return `${s}s ago`;
+  const m = Math.round(s / 60);
+  if (m < 60) return `${m} min ago`;
+  const h = Math.round(m / 60);
+  return `${h} hr ago`;
 }
 // Remaining time as a plain duration ("1 hr 14 min", "14 min", "due") — always
 // answers "how long until", never flipping to a clock time the reader has to
@@ -291,7 +350,12 @@ async function api(path) {
 // ---------- main GPS loop ----------
 function onPosition(pos) {
   const c = pos.coords;
-  const fix = { y: c.latitude, x: c.longitude, t: pos.timestamp };
+  const fix = {
+    y: c.latitude,
+    x: c.longitude,
+    t: pos.timestamp,
+    acc: (typeof c.accuracy === "number" && isFinite(c.accuracy)) ? c.accuracy : null,
+  };
   fixHistory.push(fix);
   fixHistory = fixHistory.filter((f) => f.t >= fix.t - 30000).slice(-6);
 
@@ -313,6 +377,13 @@ function onPosition(pos) {
 
   lastFix = fix;
   updateSpeedReadout();
+
+  // Keep the Nearby list live while it is open. Throttle so a 1 Hz GPS feed
+  // doesn't rebuild the DOM under the user's thumb on every fix.
+  if (activeView === "nearby" && manualView === "nearby") {
+    if (Date.now() - lastNearbyRender > 2000) renderNearbyStations({ preserveScroll: true });
+    return;
+  }
   evaluate();
 }
 
@@ -337,6 +408,7 @@ function stopGeo() {
     try { navigator.geolocation.clearWatch(geoWatchId); } catch (_) {}
   }
   geoWatchId = null;
+  if ($speed) $speed.textContent = "";
 }
 
 // Re-attempt a fix without a full restart. Safe to call repeatedly: bails if
@@ -370,12 +442,24 @@ function watchPermissionRecovery() {
 }
 
 function onPositionError(err) {
-  if (current === State.CONFIRMED) return;
+  // A locked train doesn't need GPS, unless the user has deliberately opened
+  // Nearby (which resumes the watch to refresh the station list).
+  if (current === State.CONFIRMED && manualView !== "nearby") return;
+  // If the user is browsing Nearby and we already have a fix, a transient GPS
+  // error shouldn't wipe the list they're reading. Keep it (with its age note)
+  // and surface the problem in the status line instead.
+  if (manualView === "nearby" && lastFix) {
+    setStatus(err.code === err.PERMISSION_DENIED ? "NO GPS" : "GPS ERROR", "err");
+    announce("Location unavailable — showing last known nearby stations");
+    return;
+  }
   if (err.code === err.PERMISSION_DENIED) {
     setStatus("NO GPS", "err");
+    setViewTitle("Location");
     renderNotice("LOCATION BLOCKED", "Allow location for this site — the app continues on its own once you do, or tap Try again.", false, true, false, true);
   } else {
     setStatus("GPS ERROR", "err");
+    setViewTitle("Location");
     renderNotice("WAITING FOR GPS", "Couldn't get a location fix. Move near a window if you can.", true, false, false, true);
   }
 }
@@ -386,6 +470,7 @@ function onPositionError(err) {
 function showOfflineFallback() {
   current = State.IDLE;
   clearNav();
+  setViewTitle("Offline");
   setStatus("OFFLINE", "err");
   if (pinnedTrains.length) renderPinned();
   else renderNotice("NO INTERNET", "Can't reach live train data right now.", false, true);
@@ -398,6 +483,10 @@ function evaluate() {
     return;
   }
   if (!lastFix) return;
+
+  // A screen the user deliberately opened owns the screen until they navigate
+  // away. GPS fixes still update Nearby in onPosition(); everything else waits.
+  if (manualView) return;
 
   // Respect whatever station the user is currently looking at (set by
   // enterStation, whether reached automatically or picked manually) until
@@ -448,7 +537,14 @@ function enterBetweenStations() {
   current = State.MOVING;
   pinnedStation = null;
   clearNav();
+  stationRequest++;
+  clearInterval(boardTimer);
+  boardTimer = null;
   prunePins();
+  manualView = null;
+  screenName = "moving";
+  setActiveView("train");
+  setViewTitle("On the move");
   setStatus("ON A TRAIN", "ok");
 
   const ahead = stationAhead(lastFix);
@@ -485,21 +581,96 @@ function nearestStations(pos, count) {
 
 function nearbyStationRow({ station, distance }) {
   const distTxt = distance < 1000 ? `${Math.round(distance)} m` : `${(distance / 1000).toFixed(1)} km`;
-  return `<button class="card station-row" data-crs="${esc(station.c)}" data-agent-target="select-station">
+  return `<button class="card station-row" type="button" data-crs="${esc(station.c)}" data-agent-target="select-station">
     <div class="card-dest">📍 ${esc(station.n)}</div>
     <div class="card-meta"><span class="station-tag">${esc(station.c)}</span><span>${distTxt} away</span></div>
   </button>`;
 }
 
-// A pickable list of nearby stations — for when the auto-picked "station
-// ahead" isn't the one the train's actually calling at next.
-function renderNearbyStations() {
-  if (!lastFix) { renderNotice("NO GPS FIX", "Can't list nearby stations without a location.", false, true); return; }
-  const list = nearestStations(lastFix, 8);
+// The primary station picker: a live, tap-only list of nearby stations. It
+// re-renders on GPS fixes while open, has an explicit refresh, and can widen
+// its radius without ever asking the user to type.
+function renderNearbyStations(opts = {}) {
+  stationRequest++;           // cancel any in-flight station-board load
+  clearInterval(boardTimer);
+  boardTimer = null;
+  stationLoading = false;
+  manualView = "nearby";
+  screenName = "nearby";
+  setActiveView("nearby");
+  setViewTitle("Nearby stations");
+  const keepScroll = opts.preserveScroll ? $screen.scrollTop : 0;
+
+  if (!lastFix) {
+    setStatus("LOCATING", "");
+    setBusy(true);
+    $screen.innerHTML = `<div class="notice">
+      <div class="spinner"></div>
+      <div class="big">FINDING YOUR LOCATION</div>
+      <div class="sub">Nearby stations appear as soon as we have a fix. Allow location if your browser asks.</div>
+      <button class="btn btn-wide" id="nearby-locate" data-agent-target="use-location">USE MY LOCATION</button>
+    </div>`;
+    const locate = document.getElementById("nearby-locate");
+    if (locate) locate.onclick = () => {
+      locate.classList.add("is-busy");
+      locate.setAttribute("aria-busy", "true");
+      startGeo();
+      armAcquiringNudge();
+      setStatus("LOCATING", "");
+    };
+    return;
+  }
+
+  setStatus("LOCATED", "ok");
+  setBusy(false);
+
+  if (!stations.length) {
+    $screen.innerHTML = `<div class="notice">
+      <div class="spinner"></div>
+      <div class="big">LOADING STATIONS</div>
+      <div class="sub">Getting the station list…</div>
+    </div>`;
+    setBusy(true);
+    loadStations()
+      .then(() => { if (screenName === "nearby") renderNearbyStations({ preserveScroll: true }); })
+      .catch(() => { if (screenName === "nearby") renderNotice("LOAD ERROR", "Couldn't load station data.", false, true); });
+    return;
+  }
+
+  const count = Math.min(nearbyLimit, stations.length);
+  const list = nearestStations(lastFix, count);
   const rows = list.length
     ? list.map(nearbyStationRow).join("")
     : `<div class="notice"><div class="big">No stations found nearby</div></div>`;
-  $screen.innerHTML = `<div class="screen-title">Nearby stations — tap one</div>${rows}`;
+  const stale = lastFix.t && (Date.now() - lastFix.t > 120000);
+  const acc = lastFix.acc != null ? ` · ±${Math.round(lastFix.acc)} m` : "";
+  const canShowMore = count < Math.min(stations.length, NEARBY_MAX);
+
+  $screen.innerHTML =
+    `<div class="screen-title">Tap the station you're at</div>` +
+    `<div class="board-tools">
+       <button class="btn btn-compact" id="nearby-refresh" data-agent-target="refresh-nearby"><span class="btn-ico">↻</span> <span class="btn-label">REFRESH</span></button>
+       ${canShowMore ? `<button class="btn btn-compact" id="nearby-more" data-agent-target="more-nearby">SHOW MORE</button>` : ""}
+     </div>` +
+    `<div class="loc-note${stale ? " warn" : ""}">
+       <span>Location ${agoText(lastFix.t)}${acc}</span>
+       <span>${list.length} nearest${canShowMore ? " · more available" : ""}</span>
+     </div>` +
+    rows +
+    (canShowMore ? `<div class="hint-tap">Not here? Show more nearby stations.</div>` : "");
+  lastNearbyRender = Date.now();
+  $screen.scrollTop = keepScroll;
+
+  const refresh = document.getElementById("nearby-refresh");
+  if (refresh) refresh.onclick = () => {
+    startGeo();
+    renderNearbyStations({ preserveScroll: true });
+  };
+  const more = document.getElementById("nearby-more");
+  if (more) more.onclick = () => {
+    nearbyLimit = Math.min(nearbyLimit + 8, NEARBY_MAX);
+    renderNearbyStations({ preserveScroll: true });
+  };
   $screen.querySelectorAll("[data-crs]").forEach((el) => {
     el.onclick = () => {
       const picked = list.find((x) => x.station.c === el.dataset.crs);
@@ -512,23 +683,39 @@ function renderNearbyStations() {
 // A saved shortlist of trains the user starred earlier — for quickly hopping
 // to a replacement after a cancellation, without re-scanning a station board.
 function pinnedRow(p) {
-  return `<button class="card" data-uid="${esc(p.uid)}" data-op="${esc(p.op)}" data-agent-target="select-train">
+  return `<div class="card" role="button" tabindex="0" data-uid="${esc(p.uid)}" data-op="${esc(p.op)}" data-agent-target="select-train">
     <div class="card-row">
       <span class="card-time">${esc(p.time)}</span>
-      <span class="pin-star on" data-pin-remove="${esc(p.uid)}" title="Remove">✕</span>
+      <button class="pin-star on" type="button" data-pin-remove="${esc(p.uid)}" aria-label="Remove ${esc(p.dest)} from pinned trains" title="Remove">✕</button>
     </div>
     <div class="card-dest">${esc(p.dest)}</div>
-    <div class="card-meta"><span class="op-name">${esc(p.op)}</span></div>
-  </button>`;
+    <div class="card-meta"><span class="op-name">${esc(p.op)}</span><span>${p.at ? "Saved " + agoText(p.at) : ""}</span></div>
+  </div>`;
 }
 function renderPinned() {
+  stationRequest++;
+  clearInterval(boardTimer);
+  boardTimer = null;
+  stationLoading = false;
   prunePins();
+  manualView = "pinned";
+  screenName = "pinned";
+  setActiveView("pinned");
+  setViewTitle("Pinned trains");
+  setStatus("PINNED", "ok");
+  const scroll = $screen.scrollTop;
   const rows = pinnedTrains.length
     ? pinnedTrains.map(pinnedRow).join("")
-    : `<div class="notice"><div class="big">No pinned trains</div><div class="sub">Tap ☆ on any train to save it here for quick access.</div></div>`;
-  $screen.innerHTML = `<div class="screen-title">⭐ Pinned trains</div>${rows}`;
+    : `<div class="notice"><div class="big">No pinned trains</div><div class="sub">Tap ☆ on any train to save it here for quick access.</div><button class="btn btn-wide" id="pinned-nearby" data-agent-target="nav-nearby">NEARBY STATIONS</button></div>`;
+  $screen.innerHTML = `<div class="screen-title">⭐ Saved trains</div>${rows}`;
+  setBusy(false);
+  $screen.scrollTop = scroll;
   $screen.querySelectorAll(".card[data-uid]").forEach((el) => {
-    el.onclick = () => lockOnto(el.dataset.uid, el.dataset.op, false, renderPinned);
+    const act = () => lockOnto(el.dataset.uid, el.dataset.op, false, renderPinned);
+    el.onclick = act;
+    el.onkeydown = (e) => {
+      if (e.key === "Enter" || e.key === " ") { e.preventDefault(); act(); }
+    };
   });
   $screen.querySelectorAll("[data-pin-remove]").forEach((el) => {
     el.onclick = (e) => {
@@ -537,6 +724,8 @@ function renderPinned() {
       renderPinned();
     };
   });
+  const nb = document.getElementById("pinned-nearby");
+  if (nb) nb.onclick = goNearby;
 }
 
 // Rare fallback: we have a fix but no station data to list (e.g. dataset failed).
@@ -545,36 +734,81 @@ function showLocated() {
   current = State.IDLE;
   clearNav();
   prunePins();
+  setViewTitle("Location");
   setStatus("LOCATED", "ok");
   renderNotice("GOT YOUR LOCATION ✓", "Couldn't find any nearby stations to list. Tap to try again.", false, true);
 }
 
 // ---------- STATE 1: at a station ----------
-async function enterStation(station, distance) {
+async function enterStation(station, distance, opts = {}) {
   clearNav();
   prunePins();
   current = State.STATION;
+  lastStation = station;
+  lastDistance = distance;
   // Pin this station the same way a manual pick does (see renderNearbyStations)
   // so evaluate()'s pinned-station guard protects the departures board from
   // being yanked away by a stray speed spike or drifting just past the
   // proximity radius while the user is actively reading it — only leaving
   // requires moving meaningfully away, not a single noisy GPS fix.
   pinnedStation = { crs: station.c, pos: lastFix };
-  const prevServices = discovery.stationCrs === station.c ? discovery.services : null;
-  discovery = { stationCrs: station.c, services: null };
+
+  const sameStation = discovery.stationCrs === station.c;
+  const prevServices = sameStation ? discovery.services : null;
+  if (!sameStation) boardUpdatedAt = 0;
+  discovery = { stationCrs: station.c, services: prevServices };
+
+  const token = ++stationRequest;
+  stationLoading = true;
+  manualView = "station";
+  setActiveView("nearby");
+  setViewTitle(station.n);
   setStatus(station.c, "ok");
-  renderNotice(station.n.toUpperCase(), "Loading live trains…", true);
+
+  // A reload keeps the existing board on screen instead of blanking it.
+  if (prevServices && prevServices.length) {
+    renderStation(station, prevServices, distance, { refreshing: true, updatedAt: boardUpdatedAt });
+  } else {
+    renderNotice(station.n.toUpperCase(), "Loading live trains…", true);
+    screenName = "station";
+  }
+
   try {
     const data = await api(`/api/board/${station.c}`);
-    if (current !== State.STATION || discovery.stationCrs !== station.c) return;
+    if (token !== stationRequest || current !== State.STATION) return;
     discovery.services = mergeBoardServices(data.services || [], prevServices);
-    renderStation(station, discovery.services, distance);
+    boardUpdatedAt = Date.now();
+    stationLoading = false;
+    renderStation(station, discovery.services, distance, { updatedAt: boardUpdatedAt });
   } catch (e) {
-    renderNotice("CAN'T LOAD TRAINS", e.message, false, true);
+    if (token !== stationRequest || current !== State.STATION) return;
+    stationLoading = false;
+    setStatus("BOARD ERROR", "err");
+    if (prevServices && prevServices.length) {
+      renderStation(station, prevServices, distance, { error: e.message, updatedAt: boardUpdatedAt });
+    } else {
+      renderNotice("CAN'T LOAD TRAINS", e.message, false, true);
+      screenName = "station";
+    }
   }
 }
 
-function renderStation(station, services, distance) {
+function startBoardAutoRefresh() {
+  clearInterval(boardTimer);
+  boardTimer = setInterval(() => {
+    if (screenName !== "station" || stationLoading || !lastStation) return;
+    enterStation(lastStation, lastDistance, { keep: true });
+  }, REFRESH_MS);
+}
+
+function renderStation(station, services, distance, meta = {}) {
+  stationLoading = false;
+  screenName = "station";
+  manualView = null;
+  setActiveView("nearby");
+  setViewTitle(station.n);
+  setStatus(station.c, meta.error ? "err" : "ok");
+  const scroll = $screen.scrollTop;
   const far = typeof distance === "number" && distance > STATION_RADIUS_M;
   const distTxt = typeof distance === "number"
     ? (distance < 1000 ? `${Math.round(distance)} m` : `${(distance / 1000).toFixed(1)} km`)
@@ -585,20 +819,28 @@ function renderStation(station, services, distance) {
   const cards = services.length
     ? services.map(departureCard).join("")
     : `<div class="notice"><div class="big">No trains listed right now</div><div class="sub">Try Reload — it may just be a quiet moment.</div></div>`;
+  const statusLine = meta.error
+    ? `<div class="board-status warn">Couldn't refresh — showing last update</div>`
+    : meta.refreshing
+      ? `<div class="board-status">Refreshing…</div>`
+      : `<div class="board-status">Updated ${agoText(meta.updatedAt || boardUpdatedAt)} · auto-refresh 60s</div>`;
   $screen.innerHTML =
     `<div class="screen-title">${heading}</div>` +
     `<div class="board-tools">
        <button class="btn btn-compact" id="reload-board" data-agent-target="reload-board"><span class="btn-ico">↻</span> <span class="btn-label">RELOAD</span></button>
-       <button class="btn btn-compact" id="nearby" data-agent-target="nearby-stations">STATIONS →</button>
+       <button class="btn btn-compact" id="nearby" data-agent-target="nearby-stations">NEARBY →</button>
      </div>` +
+    statusLine +
     cards +
     (pinnedTrains.length ? `<button class="link-btn" id="pinned-link" data-agent-target="pinned-trains">⭐ Pinned trains (${pinnedTrains.length})</button>` : "");
   setBusy(false);
-  bindCards(() => renderStation(station, services, distance));
-  busyTap("reload-board", "RELOADING…", () => enterStation(station, distance));
-  document.getElementById("nearby").onclick = () => { pushNav(() => renderStation(station, services, distance)); renderNearbyStations(); };
+  $screen.scrollTop = scroll;
+  bindCards(() => renderStation(station, services, distance, meta));
+  busyTap("reload-board", "RELOADING…", () => enterStation(station, distance, { keep: true }));
+  document.getElementById("nearby").onclick = () => { pushNav(() => renderStation(station, services, distance, meta)); renderNearbyStations(); };
   const pl = document.getElementById("pinned-link");
-  if (pl) pl.onclick = () => { pushNav(() => renderStation(station, services, distance)); renderPinned(); };
+  if (pl) pl.onclick = () => { pushNav(() => renderStation(station, services, distance, meta)); renderPinned(); };
+  startBoardAutoRefresh();
 }
 
 // RTT's board cuts a service off once its *booked* time passes, even if it's
@@ -653,19 +895,20 @@ function departureCard(s) {
   const plat = platformOf(s.locationMetadata);
   const op = (s.scheduleMetadata && s.scheduleMetadata.operator && s.scheduleMetadata.operator.name) || "";
   const uid = (s.scheduleMetadata && s.scheduleMetadata.uniqueIdentity) || "";
-  return `<button class="card" data-uid="${esc(uid)}" data-op="${esc(op)}" data-agent-target="select-train">
+  return `<div class="card" role="button" tabindex="0" data-uid="${esc(uid)}" data-op="${esc(op)}" data-agent-target="select-train">
     <div class="card-row"><span class="card-time">${timeHtml}</span>${pinStarHtml(uid, op, dest.name, fmtClock(live || booked))}</div>
     <div class="card-dest">${esc(dest.name)}</div>
     <div class="card-meta"><span class="op-name">${esc(op)}</span><span class="card-plat">${plat ? "Plat " + esc(plat) : "Plat —"}</span></div>
-  </button>`;
+  </div>`;
 }
 
 // A tappable star for saving a train to the pinned shortlist, without
 // triggering the card's own "lock onto this train" click (stopPropagation).
 function pinStarHtml(uid, op, dest, time) {
   const on = isPinned(uid);
-  return `<span class="pin-star${on ? " on" : ""}" data-pin-uid="${esc(uid)}" data-pin-op="${esc(op)}" ` +
-    `data-pin-dest="${esc(dest)}" data-pin-time="${esc(time)}" title="${on ? "Unpin" : "Pin this train"}">${on ? "★" : "☆"}</span>`;
+  const label = `${on ? "Unpin" : "Pin"} ${dest || "this train"}`;
+  return `<button class="pin-star${on ? " on" : ""}" type="button" data-pin-uid="${esc(uid)}" data-pin-op="${esc(op)}" ` +
+    `data-pin-dest="${esc(dest)}" data-pin-time="${esc(time)}" aria-pressed="${on}" aria-label="${esc(label)}" title="${esc(label)}">${on ? "★" : "☆"}</button>`;
 }
 function bindPinStars() {
   $screen.querySelectorAll(".pin-star").forEach((el) => {
@@ -673,9 +916,12 @@ function bindPinStars() {
       e.stopPropagation();
       togglePin({ uid: el.dataset.pinUid, op: el.dataset.pinOp, dest: el.dataset.pinDest, time: el.dataset.pinTime });
       const on = isPinned(el.dataset.pinUid);
+      const label = `${on ? "Unpin" : "Pin"} ${el.dataset.pinDest || "this train"}`;
       el.textContent = on ? "★" : "☆";
       el.classList.toggle("on", on);
-      el.title = on ? "Unpin" : "Pin this train";
+      el.setAttribute("aria-pressed", String(on));
+      el.setAttribute("aria-label", label);
+      el.title = label;
     };
   });
 }
@@ -683,9 +929,16 @@ function bindPinStars() {
 // ---------- STATE 2: moving, unidentified ----------
 async function enterMoving() {
   clearNav();
+  stationRequest++;
+  clearInterval(boardTimer);
+  boardTimer = null;
   prunePins();
   current = State.MOVING;
   pinnedStation = null;
+  manualView = "train";
+  screenName = "guess";
+  setActiveView("train");
+  setViewTitle("Find your train");
   candidates = []; candidateIdx = 0;
   setStatus("ON A TRAIN", "ok");
   renderNotice("ON THE MOVE", "Working out which train you're on…", true);
@@ -696,6 +949,7 @@ async function enterMoving() {
   try {
     const data = await api(`/api/board/${ahead.station.c}`);
     if (current !== State.MOVING) return;
+    if (screenName !== "notice" && screenName !== "guess") return;
     const prevServices = discovery.stationCrs === ahead.station.c ? discovery.services : null;
     const services = mergeBoardServices(data.services || [], prevServices);
     discovery = { stationCrs: ahead.station.c, services };
@@ -711,6 +965,8 @@ async function enterMoving() {
     if (candidates.length) { candidateIdx = 0; renderGuess(); }
     else renderFallbackList(ahead.station, services);
   } catch (e) {
+    if (screenName !== "notice" && screenName !== "guess") return;
+    setStatus("TRAIN ERROR", "err");
     renderNotice("CAN'T IDENTIFY TRAIN", e.message, false, true);
   }
 }
@@ -734,6 +990,10 @@ function rankByDirection(services, atStation) {
 }
 
 function renderGuess() {
+  screenName = "guess";
+  manualView = "train";
+  setActiveView("train");
+  setViewTitle("Find your train");
   const s = candidates[candidateIdx];
   const dep = s.temporalData && s.temporalData.departure;
   const dest = destInfo(s);
@@ -778,6 +1038,10 @@ function nextCandidate() {
 }
 
 function renderFallbackList(station, services) {
+  screenName = "fallback";
+  manualView = "train";
+  setActiveView("train");
+  setViewTitle("Find your train");
   const cards = (services || []).map(departureCard).join("")
     || `<div class="notice"><div class="big">No departures found</div></div>`;
   $screen.innerHTML =
@@ -799,7 +1063,14 @@ function renderFallbackList(station, services) {
 function lockOnto(uid, op, auto, returnTo) {
   if (!uid) return;
   clearNav();
+  stationRequest++;
+  clearInterval(boardTimer);
+  boardTimer = null;
   prunePins();
+  manualView = null;
+  screenName = "train";
+  setActiveView("train");
+  setViewTitle("My train");
   if (returnTo) pushNav(returnTo);
   locked = { uid, op: op || "", auto: !!auto };
   try { sessionStorage.setItem("mytrain.locked", JSON.stringify(locked)); } catch (_) {}
@@ -824,15 +1095,71 @@ function shareTrain() {
   try { url = location.origin + location.pathname + "?train=" + encodeURIComponent(locked.uid); } catch (_) { return; }
   if (navigator.share) { navigator.share({ title: "My Train", text: "Live train tracker", url }).catch(() => {}); return; }
   if (navigator.clipboard && navigator.clipboard.writeText) {
-    navigator.clipboard.writeText(url).then(() => setStatus("LINK COPIED", "ok"), () => window.prompt("Copy this link", url));
+    navigator.clipboard.writeText(url).then(
+      () => { setStatus("LINK COPIED", "ok"); announce("Link copied"); },
+      () => showCopyPanel(url)
+    );
     return;
   }
-  window.prompt("Copy this link", url);
+  showCopyPanel(url);
+}
+
+// Tap-only fallback for devices with no share sheet and no clipboard. No
+// input, no prompt, no keyboard: the URL is selectable text plus a copy tap.
+function showCopyPanel(url) {
+  const html = `<div class="guide-overlay" id="copy-overlay" role="dialog" aria-modal="true" aria-label="Share this train">
+    <div class="guide-card">
+      <h2>Share this train</h2>
+      <p class="sub">Copy the link below, or use your phone's share menu.</p>
+      <div class="copy-url" id="copy-url">${esc(url)}</div>
+      <button class="btn btn-wide" id="copy-link" data-agent-target="copy-link">COPY LINK</button>
+      <button class="btn btn-wide btn-ghost" id="copy-close" style="margin-top:10px" data-agent-target="close-copy">DONE</button>
+    </div>
+  </div>`;
+  let overlay = null;
+  overlay = openModal(html, () => closeModal(overlay));
+  const close = () => closeModal(overlay);
+  const copy = document.getElementById("copy-link");
+  const closeBtn = document.getElementById("copy-close");
+  if (closeBtn) closeBtn.onclick = close;
+  if (copy) copy.onclick = () => {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(url).then(
+        () => { copy.textContent = "COPIED ✓"; setStatus("LINK COPIED", "ok"); },
+        () => selectText(document.getElementById("copy-url"))
+      );
+    } else {
+      selectText(document.getElementById("copy-url"));
+    }
+  };
+  overlay.onclick = (e) => { if (e.target === overlay) close(); };
+}
+
+function selectText(el) {
+  if (!el) return;
+  try {
+    const range = document.createRange();
+    range.selectNodeContents(el);
+    const sel = window.getSelection();
+    sel.removeAllRanges();
+    sel.addRange(range);
+  } catch (_) {}
 }
 function startAutoRefresh() {
   clearInterval(refreshTimer);
-  refreshTimer = setInterval(() => { if (current === State.CONFIRMED) loadService(true); }, REFRESH_MS);
+  refreshTimer = setInterval(() => {
+    // Only poll while the user is actually looking at the train. Polling in the
+    // background is wasted data and could redraw over another tab.
+    if (current === State.CONFIRMED && screenName === "train") loadService(true);
+  }, REFRESH_MS);
 }
+
+// Is the train screen (or its loading notice) the one currently on screen?
+// Background refreshes use this so they can never replace Nearby/Pinned/QR.
+function trainScreenVisible() {
+  return current === State.CONFIRMED && (screenName === "train" || screenName === "notice");
+}
+
 async function loadService(silent) {
   if (!locked) return;
   if (!lastSvc) {
@@ -850,15 +1177,15 @@ async function loadService(silent) {
     if (!svc || !svc.locations) throw new Error("No data");
     lastLoadedAt = Date.now();
     staleMsg = "";
-    renderTrain(svc);
+    if (trainScreenVisible()) renderTrain(svc);
     try { localStorage.setItem("mytrain.lastSvc", JSON.stringify({ uid: locked.uid, at: lastLoadedAt, svc })); } catch (_) {}
   } catch (e) {
     if (lastSvc) {
       // Poor signal: keep showing the last good timetable rather than blanking it.
       staleMsg = (typeof navigator !== "undefined" && navigator.onLine === false)
         ? "Offline — showing last update" : "Couldn't refresh — showing last update";
-      renderTrain(lastSvc);
-    } else if (!silent) {
+      if (trainScreenVisible()) renderTrain(lastSvc);
+    } else if (!silent && trainScreenVisible()) {
       renderNotice("CAN'T LOAD TRAIN", e.message, false, true, true);
     }
   }
@@ -866,6 +1193,18 @@ async function loadService(silent) {
 
 function renderTrain(svc) {
   lastSvc = svc;
+  stationRequest++;
+  clearInterval(boardTimer);
+  boardTimer = null;
+  manualView = null;
+  screenName = "train";
+  setActiveView("train");
+  setViewTitle("My train");
+  const prevScroll = $screen.scrollTop;
+  const activeEl = document.activeElement;
+  const prevFocus = activeEl && $screen.contains(activeEl)
+    ? (activeEl.id || activeEl.getAttribute("data-focus-key"))
+    : null;
   const all = svc.locations || [];
   // Public calling points only (exclude PASS / CANCELLED / DIVERTED).
   const stops = all.filter((l) => {
@@ -971,31 +1310,31 @@ function renderTrain(svc) {
 
   if (myActive) {
     const kind = myIdx === nextIdx ? "getoff" : "yourstop";
-    html += stopHero(stops[myIdx], kind, myIdx === finalIdx, myIdx === nextIdx && atNext);
+    html += stopHero(stops[myIdx], kind, myIdx === finalIdx, myIdx === nextIdx && atNext, myIdx);
     if (splitBeforeMyStop) {
       html += `<div class="stop-alert">⚡ This train divides at ${esc(locName(stops[formationIdx]))} before your stop — make sure you're in the right part of the train.</div>`;
     }
     if (myIdx !== nextIdx) {
       // Next stop demoted to a quiet, still-tappable line (it's general info now).
       const nArr = bestTime((next.temporalData && (next.temporalData.arrival || next.temporalData.departure)) || null);
-      html += `<div class="nextline" role="button" tabindex="0" data-crs="${esc(stopCrs(next))}">
+      html += `<div class="nextline" role="button" tabindex="0" data-focus-key="nextline" data-crs="${esc(stopCrs(next))}">
         <span><span class="nl-label">Next stop</span> ${esc(locName(next))}</span>
         <span class="nl-eta">${etaHM(nArr) || "—"}</span>
       </div>`;
     }
   } else if (!arrived) {
-    html += stopHero(next, nextIdx === finalIdx ? "final" : "next", nextIdx === finalIdx, atNext);
+    html += stopHero(next, nextIdx === finalIdx ? "final" : "next", nextIdx === finalIdx, atNext, nextIdx);
     html += `<div class="hint-tap">Tap your stop below to track when to get off.</div>`;
   }
 
   // If the chosen stop is already behind us, collapse it to a small clear-me line.
   if (myIdx >= 0 && (arrived || myIdx < nextIdx)) {
-    html += `<div class="passed-note" role="button" tabindex="0" data-crs="${esc(myCrs)}">Passed ${esc(locName(stops[myIdx]))} · tap to clear</div>`;
+    html += `<div class="passed-note" role="button" tabindex="0" data-focus-key="passed" data-crs="${esc(myCrs)}">Passed ${esc(locName(stops[myIdx]))} · tap to clear</div>`;
   }
 
   if (!arrived && finalIdx > nextIdx) {
     html += `<div class="screen-title" style="margin-top:16px">Then calling at</div>`;
-    for (let i = nextIdx + 1; i <= finalIdx; i++) html += stopRow(stops[i], i === finalIdx, myCrs, i === formationIdx);
+    for (let i = nextIdx + 1; i <= finalIdx; i++) html += stopRow(stops[i], i === finalIdx, myCrs, i === formationIdx, i);
   }
 
   html += `<button class="btn btn-wide refresh-btn" id="refresh-now" data-agent-target="refresh-train"><span class="btn-ico">↻</span> <span class="btn-label">REFRESH</span></button>`;
@@ -1003,7 +1342,7 @@ function renderTrain(svc) {
   const agoTxt = !lastLoadedAt ? "now" : (ago <= 0 ? "just now" : `${ago} min ago`);
   html += `<div class="updated-note${staleMsg ? " warn" : ""}">${staleMsg ? esc(staleMsg) + " · " : "Updated "}${staleMsg ? "" : agoTxt + " · "}auto-refresh 60s</div>`;
   html += `<button class="btn btn-wide" id="qr" style="margin-top:8px" data-agent-target="share-train">▦ SHARE / QR</button>`;
-  html += `<button class="btn btn-wide" id="forget" style="margin-top:10px" data-agent-target="pick-different-train">DIFFERENT TRAIN</button>`;
+  html += `<button class="btn btn-wide btn-ghost" id="forget" style="margin-top:10px" data-agent-target="pick-different-train">CHANGE TRAIN</button>`;
   if (pinnedTrains.length) html += `<button class="link-btn" id="pinned-link" data-agent-target="pinned-trains">⭐ Pinned trains (${pinnedTrains.length})</button>`;
   html += `<div class="app-footer">
     Made by <a href="https://www.strangegoose.co.uk" target="_blank" rel="noopener">Strange Goose</a><br>
@@ -1013,6 +1352,12 @@ function renderTrain(svc) {
 
   $screen.innerHTML = html;
   setBusy(false);
+  $screen.scrollTop = prevScroll;
+  if (prevFocus) {
+    const el = document.getElementById(prevFocus) ||
+      $screen.querySelector(`[data-focus-key="${prevFocus}"]`);
+    if (el && el.focus) el.focus({ preventScroll: true });
+  }
   busyTap("refresh-now", "REFRESHING…", () => loadService(false));
   document.getElementById("forget").onclick = forgetTrain;
   const qr = document.getElementById("qr");
@@ -1043,6 +1388,13 @@ function setMyStop(crs) {
 // screen and open the same live train view — the same idea as on-train QR codes.
 function renderQR() {
   if (!locked) return;
+  stationRequest++;
+  clearInterval(boardTimer);
+  boardTimer = null;
+  screenName = "qr";
+  manualView = "train";
+  setActiveView("train");
+  setViewTitle("Share train");
   let url;
   try { url = location.origin + location.pathname + "?train=" + encodeURIComponent(locked.uid); }
   catch (_) { url = "?train=" + encodeURIComponent(locked.uid); }
@@ -1127,7 +1479,7 @@ function schedExpHtml(booked, arr) {
 
 // The hero board: the one stop the user most cares about, rendered like the
 // train's own LED display. kind: "yourstop" | "getoff" | "next" | "final".
-function stopHero(stop, kind, isFinal, atStop) {
+function stopHero(stop, kind, isFinal, atStop, idx) {
   const td = stop.temporalData || {};
   // Sitting at this stop → its departure is the meaningful time (arrival is
   // already in the past); otherwise its arrival.
@@ -1150,7 +1502,7 @@ function stopHero(stop, kind, isFinal, atStop) {
   let big = etaHM(arr) || "—";
   if (atStop && big === "due") big = "now";
   const meta = late ? `${metaWord} ${fmtClock(arr)} · was ${fmtClock(booked)}` : `${metaWord} ${fmtClock(arr)}`;
-  return `<div class="stophero${kind === "getoff" ? " is-now" : ""}${late ? " is-late" : ""}${isFinal ? " is-final" : ""}" role="button" tabindex="0" data-crs="${esc(stopCrs(stop))}">
+  return `<div class="stophero${kind === "getoff" ? " is-now" : ""}${late ? " is-late" : ""}${isFinal ? " is-final" : ""}" role="button" tabindex="0" data-focus-key="stop-${idx}" data-crs="${esc(stopCrs(stop))}">
     <div class="sh-eye-row">
       <span class="sh-eye">${eyebrow}</span>
       ${status}
@@ -1162,7 +1514,7 @@ function stopHero(stop, kind, isFinal, atStop) {
 }
 
 // Compact one-line row for each remaining calling point in the full timetable.
-function stopRow(stop, isFinal, myCrs, isFormationChange) {
+function stopRow(stop, isFinal, myCrs, isFormationChange, idx) {
   const td = stop.temporalData || {};
   const tdArr = td.arrival || td.departure;
   const arr = bestTime(tdArr);
@@ -1175,7 +1527,7 @@ function stopRow(stop, isFinal, myCrs, isFormationChange) {
   // floor at .sr-xlong). Length-based rather than measuring the DOM, so it
   // costs nothing on the 60s auto-refresh.
   const sizeClass = name.length > 25 ? " sr-xlong" : name.length > 17 ? " sr-long" : "";
-  return `<div class="stoprow${isFinal ? " final" : ""}${mine}" role="button" tabindex="0" data-crs="${esc(crs)}">
+  return `<div class="stoprow${isFinal ? " final" : ""}${mine}" role="button" tabindex="0" data-focus-key="stop-${idx}" data-crs="${esc(crs)}">
     <span class="sr-name${sizeClass}">${esc(name)}${isFinal ? ` <span class="sr-dest">DEST</span>` : ""}${mine ? ` <span class="sr-dest">YOUR STOP</span>` : ""}</span>
     <span class="sr-right">
       <span class="sr-eta">${etaHM(arr) || "—"}</span>
@@ -1187,6 +1539,9 @@ function stopRow(stop, isFinal, myCrs, isFormationChange) {
 
 function forgetTrain() {
   clearNav();
+  stationRequest++;
+  clearInterval(boardTimer);
+  boardTimer = null;
   prunePins();
   clearInterval(refreshTimer);
   locked = null;
@@ -1196,15 +1551,20 @@ function forgetTrain() {
   lastFix = null;
   fixHistory = [];
   lastSvc = null; lastLoadedAt = 0; staleMsg = "";
+  lastStation = null; lastDistance = null; boardUpdatedAt = 0;
   pinnedStation = null;
+  manualView = null;
   setStatus("LOCATING", "");
-  renderNotice("FINDING YOU", "Re-checking your location…", true, false, false, true);
+  // Back to the Nearby picker rather than dropping the user on a bare
+  // spinner: they choose the station, then the train.
+  renderNearbyStations();
   startGeo();   // resume GPS to pick the next train
   armAcquiringNudge();
 }
 
 // ---------- rendering primitives ----------
 function renderNotice(big, sub, spinner, isError, allowForget, allowPinned) {
+  screenName = "notice";
   $screen.innerHTML = `<div class="notice">
     ${spinner ? `<div class="spinner"></div>` : ""}
     <div class="big">${esc(big)}</div>
@@ -1214,9 +1574,38 @@ function renderNotice(big, sub, spinner, isError, allowForget, allowPinned) {
     ${allowPinned && pinnedTrains.length ? `<button class="link-btn" id="pinned-link" data-agent-target="pinned-trains">⭐ Pinned trains (${pinnedTrains.length})</button>` : ""}
   </div>`;
   setBusy(!!spinner);
+  announce(big);
   const retry = document.getElementById("retry");
   if (retry) retry.onclick = () => {
+    // The Nearby picker owns retry while it is open: resume GPS and redraw the
+    // list (which also reloads stations if that was what failed).
+    if (manualView === "nearby") {
+      if (!lastFix) { startGeo(); armAcquiringNudge(); }
+      renderNearbyStations({ preserveScroll: true });
+      return;
+    }
     if (current === State.CONFIRMED) return loadService(false);
+    if (current === State.STATION && lastStation) {
+      enterStation(lastStation, lastDistance, { keep: false });
+      return;
+    }
+    if (current === State.MOVING) {
+      enterMoving();
+      return;
+    }
+    if (!stations.length) {
+      loadStations()
+        .then(() => {
+          if (manualView === "nearby") {
+            renderNearbyStations({ preserveScroll: true });
+          } else {
+            current = State.ACQUIRING;
+            evaluate();
+          }
+        })
+        .catch(() => renderNotice("LOAD ERROR", "Couldn't load station data.", false, true));
+      return;
+    }
     current = State.ACQUIRING;
     if (!lastFix) { startGeo(); armAcquiringNudge(); }
     evaluate();
@@ -1228,7 +1617,11 @@ function renderNotice(big, sub, spinner, isError, allowForget, allowPinned) {
 }
 function bindCards(returnTo) {
   $screen.querySelectorAll(".card").forEach((el) => {
-    el.onclick = () => lockOnto(el.dataset.uid, el.dataset.op, false, returnTo);
+    const act = () => lockOnto(el.dataset.uid, el.dataset.op, false, returnTo);
+    el.onclick = act;
+    el.onkeydown = (e) => {
+      if (e.key === "Enter" || e.key === " ") { e.preventDefault(); act(); }
+    };
   });
   bindPinStars();
 }
@@ -1243,14 +1636,52 @@ function esc(s) {
 // to <body> rather than rendered into #screen, so it floats above whatever
 // screen is currently showing without disturbing app state underneath.
 const GUIDE_STEPS = [
-  "No typing — just allow location and the app does the rest.",
+  "No typing — allow location, then tap your station from the nearby list.",
   "<b>At a station:</b> tap the train you're on from the live departures, then pin it (★).",
   "<b>Locked on:</b> see every remaining stop with live times, platforms and delays, auto-refreshing every 60s.",
   "Tap a stop to get a reminder banner when it's time to get off.",
   "Pin a train (★), or share it as a QR code / link — both work from the train screen.",
   "<b>Between stations:</b> the app waits for the next station's board rather than guessing — \"Lost your train?\" is there if you really can't wait.",
+  "<b>Bottom tabs:</b> Nearby, Pinned and My train are always one tap away.",
 ];
+// Shared modal plumbing: focus trap, Escape, scroll lock, focus restoration.
+let modalReturnFocus = null;
+let modalKeyHandler = null;
+let guideOverlay = null;
+
+function openModal(html, closeFn) {
+  document.body.insertAdjacentHTML("beforeend", html);
+  const overlay = document.body.lastElementChild;
+  modalReturnFocus = document.activeElement;
+  document.body.classList.add("modal-open");
+  modalKeyHandler = (e) => {
+    if (e.key === "Escape") { e.preventDefault(); closeFn(); return; }
+    if (e.key !== "Tab") return;
+    const focusables = Array.from(overlay.querySelectorAll("button, [href], [tabindex]:not([tabindex='-1'])"));
+    if (!focusables.length) return;
+    const first = focusables[0], last = focusables[focusables.length - 1];
+    if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+    else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+  };
+  document.addEventListener("keydown", modalKeyHandler);
+  const first = overlay.querySelector("button, [href], [tabindex]");
+  if (first) first.focus();
+  return overlay;
+}
+
+function closeModal(overlay) {
+  if (modalKeyHandler) document.removeEventListener("keydown", modalKeyHandler);
+  modalKeyHandler = null;
+  document.body.classList.remove("modal-open");
+  if (overlay) overlay.remove();
+  if (modalReturnFocus && modalReturnFocus.focus) {
+    try { modalReturnFocus.focus({ preventScroll: true }); } catch (_) {}
+  }
+  modalReturnFocus = null;
+}
+
 function showGuide() {
+  if (document.getElementById("guide-overlay")) return;
   const html = `<div class="guide-overlay" id="guide-overlay" role="dialog" aria-modal="true" aria-label="How My Train works">
     <div class="guide-card">
       <h2>How My Train works</h2>
@@ -1258,22 +1689,104 @@ function showGuide() {
       <button class="btn btn-wide" id="guide-ok" data-agent-target="close-help">GOT IT</button>
     </div>
   </div>`;
-  document.body.insertAdjacentHTML("beforeend", html);
-  const overlay = document.getElementById("guide-overlay");
+  guideOverlay = openModal(html, hideGuide);
   if ($helpBtn) $helpBtn.setAttribute("aria-expanded", "true");
   document.getElementById("guide-ok").onclick = hideGuide;
-  overlay.onclick = (e) => { if (e.target === overlay) hideGuide(); };
+  guideOverlay.onclick = (e) => { if (e.target === guideOverlay) hideGuide(); };
 }
 function hideGuide() {
-  const overlay = document.getElementById("guide-overlay");
-  if (overlay) overlay.remove();
+  if (guideOverlay) { closeModal(guideOverlay); guideOverlay = null; }
   if ($helpBtn) $helpBtn.setAttribute("aria-expanded", "false");
 }
 if ($helpBtn) $helpBtn.onclick = showGuide;
 
+// ---------- station data + tab navigation ----------
+function loadStations() {
+  if (stationsPromise) return stationsPromise;
+  stationsPromise = fetch("stations.json")
+    .then((res) => {
+      if (!res.ok) throw new Error(`Station list error (${res.status})`);
+      return res.json();
+    })
+    .then((list) => {
+      stations = list;
+      nameIndex = new Map(stations.map((s) => [s.n.toLowerCase(), { y: s.y, x: s.x }]));
+      return list;
+    })
+    .catch((err) => {
+      stationsPromise = null;
+      throw err;
+    });
+  return stationsPromise;
+}
+
+function renderNoTrain() {
+  stationRequest++;
+  clearInterval(boardTimer);
+  boardTimer = null;
+  manualView = "train";
+  screenName = "no-train";
+  setActiveView("train");
+  setViewTitle("My train");
+  setStatus("NO TRAIN", "");
+  $screen.innerHTML = `<div class="notice">
+    <div class="big">No train selected</div>
+    <div class="sub">Pick the station you're at from the nearby list, then tap your train.</div>
+    <button class="btn btn-wide" id="no-train-nearby" data-agent-target="nav-nearby">NEARBY STATIONS</button>
+  </div>`;
+  setBusy(false);
+  const nb = document.getElementById("no-train-nearby");
+  if (nb) nb.onclick = goNearby;
+}
+
+function goNearby() {
+  clearNav();
+  // Locking onto a train stops the GPS watch to save battery; opening Nearby
+  // again needs a fresh fix, so resume it when there is no watch running.
+  if (geoWatchId == null && navigator.geolocation) startGeo();
+  renderNearbyStations();
+}
+
+function goPinned() {
+  clearNav();
+  renderPinned();
+}
+
+function goTrain() {
+  clearNav();
+  if (locked) {
+    current = State.CONFIRMED;
+    stopGeo();              // train is known; no need to track location
+    manualView = null;
+    screenName = "train";
+    setActiveView("train");
+    setViewTitle("My train");
+    setStatus("TRAIN LOCKED", "ok");
+    if (lastSvc) renderTrain(lastSvc);
+    else loadService();
+    startAutoRefresh();
+    return;
+  }
+  if (current === State.MOVING) { enterBetweenStations(); return; }
+  renderNoTrain();
+}
+
+function bindNav() {
+  document.querySelectorAll("#tabbar [data-nav]").forEach((btn) => {
+    btn.onclick = () => {
+      if (btn.dataset.nav === "nearby") goNearby();
+      else if (btn.dataset.nav === "pinned") goPinned();
+      else goTrain();
+    };
+  });
+}
+
 // ---------- boot ----------
 async function boot() {
   if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(() => {});
+  bindNav();
+  setActiveView("nearby");
+  setViewTitle("My Train");
 
   try {
     if (!localStorage.getItem("mytrain.seenGuide")) {
@@ -1293,6 +1806,9 @@ async function boot() {
     try {
       locked = JSON.parse(saved);
       current = State.CONFIRMED;
+      screenName = "train";
+      setActiveView("train");
+      setViewTitle("My train");
       setStatus("TRAIN LOCKED", "ok");
       loadService();
       startAutoRefresh();
@@ -1303,21 +1819,19 @@ async function boot() {
     showOfflineFallback();
   } else {
     setStatus("STARTING", "");
-    renderNotice("GETTING LOCATION", "Allow location to find your train.", true, false, false, true);
+    renderNearbyStations();
   }
 
   // Fetch the station list in parallel with GPS acquisition below — on a slow
   // connection this can take a while, and there's no reason to make the user
   // wait on it before we even ask for a location fix.
-  fetch("stations.json")
-    .then((res) => res.json())
-    .then((list) => {
-      stations = list;
-      nameIndex = new Map(stations.map((s) => [s.n.toLowerCase(), { y: s.y, x: s.x }]));
+  loadStations()
+    .then(() => {
+      if (screenName === "nearby") renderNearbyStations({ preserveScroll: true });
     })
     .catch(() => {
       if (current !== State.CONFIRMED && current !== State.IDLE) {
-        renderNotice("LOAD ERROR", "Couldn't load station data. Reload the app.", false, true);
+        renderNotice("LOAD ERROR", "Couldn't load station data.", false, true);
       }
     });
 

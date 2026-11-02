@@ -3,7 +3,7 @@
  * Shell assets are network-first (see fetch handler below) so a deploy is
  * visible on next load without anyone having to remember to bump CACHE. */
 
-const CACHE = "mytrain-shell-v10";
+const CACHE = "mytrain-shell-v11";
 const SHELL = [
   "./",
   "./styles.css",
