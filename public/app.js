@@ -321,6 +321,24 @@ function togglePin(info) {
   if (pinnedTrains.length > PINNED_MAX) pinnedTrains.length = PINNED_MAX;
   savePinnedTrains();
 }
+// Keep the train you're currently on in the pinned list, so Pinned is always
+// the way back to it (there's no separate "My train" tab). Details filled in
+// later from the service response are merged without overwriting good values.
+function pinCurrentTrain(uid, op, dest, time) {
+  if (!uid) return;
+  let p = pinnedTrains.find((x) => x.uid === uid);
+  let changed = false;
+  if (!p) {
+    p = { uid, op: op || "", dest: dest || "", time: time || "", at: Date.now() };
+    pinnedTrains.unshift(p);
+    if (pinnedTrains.length > PINNED_MAX) pinnedTrains.length = PINNED_MAX;
+    changed = true;
+  }
+  if (op && p.op !== op) { p.op = op; changed = true; }
+  if (dest && p.dest !== dest) { p.dest = dest; changed = true; }
+  if (time && p.time !== time) { p.time = time; changed = true; }
+  if (changed) savePinnedTrains();
+}
 function platformOf(meta) {
   const p = meta && meta.platform;
   return p ? (p.actual || p.planned || "") : "";
@@ -661,11 +679,11 @@ function renderNearbyStations(opts = {}) {
   lastNearbyRender = Date.now();
   $screen.scrollTop = keepScroll;
 
-  const refresh = document.getElementById("nearby-refresh");
-  if (refresh) refresh.onclick = () => {
+  busyTap("nearby-refresh", "REFRESHING…", () => {
+    if (screenName !== "nearby") return;
     startGeo();
     renderNearbyStations({ preserveScroll: true });
-  };
+  });
   const more = document.getElementById("nearby-more");
   if (more) more.onclick = () => {
     nearbyLimit = Math.min(nearbyLimit + 8, NEARBY_MAX);
@@ -895,7 +913,7 @@ function departureCard(s) {
   const plat = platformOf(s.locationMetadata);
   const op = (s.scheduleMetadata && s.scheduleMetadata.operator && s.scheduleMetadata.operator.name) || "";
   const uid = (s.scheduleMetadata && s.scheduleMetadata.uniqueIdentity) || "";
-  return `<div class="card" role="button" tabindex="0" data-uid="${esc(uid)}" data-op="${esc(op)}" data-agent-target="select-train">
+  return `<div class="card" role="button" tabindex="0" data-uid="${esc(uid)}" data-op="${esc(op)}" data-dest="${esc(dest.name)}" data-time="${esc(fmtClock(live || booked))}" data-agent-target="select-train">
     <div class="card-row"><span class="card-time">${timeHtml}</span>${pinStarHtml(uid, op, dest.name, fmtClock(live || booked))}</div>
     <div class="card-dest">${esc(dest.name)}</div>
     <div class="card-meta"><span class="op-name">${esc(op)}</span><span class="card-plat">${plat ? "Plat " + esc(plat) : "Plat —"}</span></div>
@@ -1060,7 +1078,7 @@ function renderFallbackList(station, services) {
 }
 
 // ---------- STATE 3: confirmed ----------
-function lockOnto(uid, op, auto, returnTo) {
+function lockOnto(uid, op, auto, returnTo, info) {
   if (!uid) return;
   clearNav();
   stationRequest++;
@@ -1069,10 +1087,11 @@ function lockOnto(uid, op, auto, returnTo) {
   prunePins();
   manualView = null;
   screenName = "train";
-  setActiveView("train");
+  setActiveView("pinned");
   setViewTitle("My train");
   if (returnTo) pushNav(returnTo);
   locked = { uid, op: op || "", auto: !!auto };
+  pinCurrentTrain(uid, op, info && info.dest, info && info.time);
   try { sessionStorage.setItem("mytrain.locked", JSON.stringify(locked)); } catch (_) {}
   // Make the URL a deep link to this exact train (shareable / bookmarkable / QR-able).
   try {
@@ -1198,7 +1217,7 @@ function renderTrain(svc) {
   boardTimer = null;
   manualView = null;
   screenName = "train";
-  setActiveView("train");
+  setActiveView("pinned");
   setViewTitle("My train");
   const prevScroll = $screen.scrollTop;
   const activeEl = document.activeElement;
@@ -1247,6 +1266,9 @@ function renderTrain(svc) {
   const originBooked = bookedTime(originDep);
   const originLive = bestTime(originDep);
   const dueHtml = `${fmtClock(originBooked || originLive)} from ${esc(locName(stops[0]))}`;
+
+  // The train you're on is always in Pinned, so that tab is the way back to it.
+  pinCurrentTrain(locked.uid, op, finalName, fmtClock(originBooked || originLive));
 
   // Where the train is right now.
   let posLine;
@@ -1393,7 +1415,7 @@ function renderQR() {
   boardTimer = null;
   screenName = "qr";
   manualView = "train";
-  setActiveView("train");
+  setActiveView("pinned");
   setViewTitle("Share train");
   let url;
   try { url = location.origin + location.pathname + "?train=" + encodeURIComponent(locked.uid); }
@@ -1617,7 +1639,10 @@ function renderNotice(big, sub, spinner, isError, allowForget, allowPinned) {
 }
 function bindCards(returnTo) {
   $screen.querySelectorAll(".card").forEach((el) => {
-    const act = () => lockOnto(el.dataset.uid, el.dataset.op, false, returnTo);
+    const act = () => lockOnto(el.dataset.uid, el.dataset.op, false, returnTo, {
+      dest: el.dataset.dest || "",
+      time: el.dataset.time || "",
+    });
     el.onclick = act;
     el.onkeydown = (e) => {
       if (e.key === "Enter" || e.key === " ") { e.preventDefault(); act(); }
@@ -1642,7 +1667,7 @@ const GUIDE_STEPS = [
   "Tap a stop to get a reminder banner when it's time to get off.",
   "Pin a train (★), or share it as a QR code / link — both work from the train screen.",
   "<b>Between stations:</b> the app waits for the next station's board rather than guessing — \"Lost your train?\" is there if you really can't wait.",
-  "<b>Bottom tabs:</b> Nearby, Pinned and My train are always one tap away.",
+  "<b>Bottom tabs:</b> Nearby and Pinned are always one tap away — your current train lives in Pinned.",
 ];
 // Shared modal plumbing: focus trap, Escape, scroll lock, focus restoration.
 let modalReturnFocus = null;
@@ -1720,25 +1745,6 @@ function loadStations() {
   return stationsPromise;
 }
 
-function renderNoTrain() {
-  stationRequest++;
-  clearInterval(boardTimer);
-  boardTimer = null;
-  manualView = "train";
-  screenName = "no-train";
-  setActiveView("train");
-  setViewTitle("My train");
-  setStatus("NO TRAIN", "");
-  $screen.innerHTML = `<div class="notice">
-    <div class="big">No train selected</div>
-    <div class="sub">Pick the station you're at from the nearby list, then tap your train.</div>
-    <button class="btn btn-wide" id="no-train-nearby" data-agent-target="nav-nearby">NEARBY STATIONS</button>
-  </div>`;
-  setBusy(false);
-  const nb = document.getElementById("no-train-nearby");
-  if (nb) nb.onclick = goNearby;
-}
-
 function goNearby() {
   clearNav();
   // Locking onto a train stops the GPS watch to save battery; opening Nearby
@@ -1752,31 +1758,11 @@ function goPinned() {
   renderPinned();
 }
 
-function goTrain() {
-  clearNav();
-  if (locked) {
-    current = State.CONFIRMED;
-    stopGeo();              // train is known; no need to track location
-    manualView = null;
-    screenName = "train";
-    setActiveView("train");
-    setViewTitle("My train");
-    setStatus("TRAIN LOCKED", "ok");
-    if (lastSvc) renderTrain(lastSvc);
-    else loadService();
-    startAutoRefresh();
-    return;
-  }
-  if (current === State.MOVING) { enterBetweenStations(); return; }
-  renderNoTrain();
-}
-
 function bindNav() {
   document.querySelectorAll("#tabbar [data-nav]").forEach((btn) => {
     btn.onclick = () => {
       if (btn.dataset.nav === "nearby") goNearby();
       else if (btn.dataset.nav === "pinned") goPinned();
-      else goTrain();
     };
   });
 }
@@ -1807,7 +1793,8 @@ async function boot() {
       locked = JSON.parse(saved);
       current = State.CONFIRMED;
       screenName = "train";
-      setActiveView("train");
+      setActiveView("pinned");
+      pinCurrentTrain(locked.uid, locked.op);
       setViewTitle("My train");
       setStatus("TRAIN LOCKED", "ok");
       loadService();
