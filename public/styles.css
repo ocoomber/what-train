@@ -312,6 +312,15 @@ body {
 .badge-late { color: var(--red); font-weight: 700; font-size: 1.1em; }
 .badge-warn { color: var(--amber); font-weight: 700; font-size: 1.1em; }
 .strike { text-decoration: line-through; color: var(--fg-dim); }
+/* A replacement bus is a normal selectable departure, but it must never be
+   mistaken for a train: amber edge + an explicit mode badge. */
+.card.is-bus, .guess-card.is-bus { border-left: 4px solid var(--amber); }
+.mode-badge {
+  display: inline-flex; align-items: center; gap: 4px;
+  color: var(--amber); font-weight: 700; font-size: 13px;
+  letter-spacing: 0.5px; white-space: nowrap;
+}
+.train-head .op .mode-badge { margin-left: 8px; font-size: 12px; vertical-align: middle; }
 
 /* ---- the "are you on this train?" guess card ---- */
 .guess-wrap { display: flex; flex-direction: column; gap: 16px; }
@@ -395,6 +404,7 @@ body {
 .delay-ok { background: rgba(79,208,138,0.12); color: var(--green); border: 1px solid rgba(79,208,138,0.4); }
 .delay-warn { background: rgba(255,157,46,0.12); color: var(--amber); border: 1px solid rgba(255,157,46,0.4); }
 .delay-bad { background: rgba(255,107,107,0.12); color: var(--red); border: 1px solid rgba(255,107,107,0.4); }
+.delay-neutral { background: rgba(255,255,255,0.05); color: var(--fg-dim); border: 1px solid var(--panel-edge); }
 .delay-reason { font-weight: 400; font-size: 15px; color: var(--fg); margin-top: 6px; }
 
 /* ---- the hero: your chosen stop (or the next one), as the train's LED board ---- */
@@ -434,6 +444,7 @@ body {
 .sh-status { display: inline-flex; align-items: center; gap: 7px; font-size: 14px; font-weight: 700; border-radius: 8px; padding: 7px 11px; }
 .sh-status.ok { color: var(--green); background: rgba(79,208,138,0.12); }
 .sh-status.late { color: var(--amber); background: rgba(255,157,46,0.13); }
+.sh-status.scheduled { color: var(--fg-mid); background: rgba(255,255,255,0.06); }
 .sh-status small { font-weight: 400; color: var(--fg-mid); }
 
 /* Demoted next-stop line (when a stop is chosen) and the passed-stop clear line. */
@@ -533,6 +544,7 @@ body {
 
 /* Scheduled/expected timing shared by the hero and stop rows. */
 .on-time { color: var(--green); }
+.scheduled { color: var(--fg-mid); }
 .exp { color: var(--amber); font-weight: 700; }
 .arrow { color: var(--fg-dim); }
 

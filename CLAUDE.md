@@ -30,6 +30,12 @@ See `README.md` for the user-facing flow and `DEPLOY.md` for deployment.
   (`query.location.shortCodes`). `public/stations.json` has no TIPLOC field,
   so matching a service's origin/destination to a station must go by name
   (`location.description`), not code — see `nameIndex` in `public/app.js`.
+- `scheduleMetadata.modeType` is `TRAIN | SHIP | BUS | SCHEDULED_BUS |
+  REPLACEMENT_BUS`. Boards include rail-replacement buses during engineering
+  works; `public/app.js` shows them as selectable cards with an amber mode
+  badge rather than filtering them out, and switches titles/copy to "bus".
+  The sample response only contains `TRAIN`, so the bus calling-point shape is
+  still unverified against live data.
 - This was only confirmed against board responses. `stopCrs()` in
   `public/app.js` reads `shortCodes` off the richer per-calling-point
   `locations[]` from `/api/service?uid=`, which hasn't been checked against

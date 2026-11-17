@@ -324,12 +324,12 @@ function togglePin(info) {
 // Keep the train you're currently on in the pinned list, so Pinned is always
 // the way back to it (there's no separate "My train" tab). Details filled in
 // later from the service response are merged without overwriting good values.
-function pinCurrentTrain(uid, op, dest, time) {
+function pinCurrentTrain(uid, op, dest, time, mode) {
   if (!uid) return;
   let p = pinnedTrains.find((x) => x.uid === uid);
   let changed = false;
   if (!p) {
-    p = { uid, op: op || "", dest: dest || "", time: time || "", at: Date.now() };
+    p = { uid, op: op || "", dest: dest || "", time: time || "", mode: mode || "", at: Date.now() };
     pinnedTrains.unshift(p);
     if (pinnedTrains.length > PINNED_MAX) pinnedTrains.length = PINNED_MAX;
     changed = true;
@@ -337,6 +337,7 @@ function pinCurrentTrain(uid, op, dest, time) {
   if (op && p.op !== op) { p.op = op; changed = true; }
   if (dest && p.dest !== dest) { p.dest = dest; changed = true; }
   if (time && p.time !== time) { p.time = time; changed = true; }
+  if (mode && p.mode !== mode) { p.mode = mode; changed = true; }
   if (changed) savePinnedTrains();
 }
 function platformOf(meta) {
@@ -346,6 +347,36 @@ function platformOf(meta) {
 function destInfo(svc) {
   const d = svc.destination && svc.destination[0] && svc.destination[0].location;
   return { name: (d && d.description) || "—" };
+}
+
+// RTT tags every service with the form of transport it actually is, in
+// scheduleMetadata.modeType: TRAIN | SHIP | BUS | SCHEDULED_BUS |
+// REPLACEMENT_BUS. Replacement buses appear on station boards during
+// engineering works, so show them like any other departure — but make it
+// unmistakable that this one is a bus, not a train.
+function modeOf(svc) {
+  const raw = svc && svc.scheduleMetadata && svc.scheduleMetadata.modeType;
+  return (typeof raw === "string" && raw) ? raw.toUpperCase() : "TRAIN";
+}
+function isBusMode(mode) {
+  return mode === "BUS" || mode === "SCHEDULED_BUS" || mode === "REPLACEMENT_BUS";
+}
+function isTrainMode(mode) { return !mode || mode === "TRAIN"; }
+function modeNoun(mode) {
+  return isBusMode(mode) ? "bus" : mode === "SHIP" ? "ferry" : "train";
+}
+function modeLabel(mode) {
+  return mode === "REPLACEMENT_BUS" ? "Replacement bus"
+    : mode === "SCHEDULED_BUS" ? "Scheduled bus"
+    : mode === "BUS" ? "Bus"
+    : mode === "SHIP" ? "Ferry"
+    : "";
+}
+function modeIcon(mode) { return isBusMode(mode) ? "🚌" : mode === "SHIP" ? "⛴" : "🚆"; }
+function modeTitle(mode) { return "My " + modeNoun(mode); }
+function modeBadgeHtml(mode) {
+  const label = modeLabel(mode);
+  return label ? `<span class="mode-badge">${modeIcon(mode)} ${esc(label.toUpperCase())}</span>` : "";
 }
 
 // ---------- RTT API ----------
@@ -491,7 +522,7 @@ function showOfflineFallback() {
   setViewTitle("Offline");
   setStatus("OFFLINE", "err");
   if (pinnedTrains.length) renderPinned();
-  else renderNotice("NO INTERNET", "Can't reach live train data right now.", false, true);
+  else renderNotice("NO INTERNET", "Can't reach live data right now.", false, true);
 }
 
 function evaluate() {
@@ -575,7 +606,7 @@ function enterBetweenStations() {
     <div class="sub">${esc(sub)}</div>
   </div>`;
   if (pinnedTrains.length) {
-    html += `<button class="btn btn-wide" id="resume-pinned" data-agent-target="pinned-trains">⭐ Your pinned trains (${pinnedTrains.length})</button>`;
+    html += `<button class="btn btn-wide" id="resume-pinned" data-agent-target="pinned-trains">⭐ Your pinned services (${pinnedTrains.length})</button>`;
   }
   html += `<button class="link-btn" id="find-now" data-agent-target="find-train-now">🆘 Lost your train? Find it now</button>`;
 
@@ -701,13 +732,15 @@ function renderNearbyStations(opts = {}) {
 // A saved shortlist of trains the user starred earlier — for quickly hopping
 // to a replacement after a cancellation, without re-scanning a station board.
 function pinnedRow(p) {
-  return `<div class="card" role="button" tabindex="0" data-uid="${esc(p.uid)}" data-op="${esc(p.op)}" data-agent-target="select-train">
+  const mode = p.mode || "TRAIN";
+  const badge = modeBadgeHtml(mode);
+  return `<div class="card${isTrainMode(mode) ? "" : " is-bus"}" role="button" tabindex="0" data-uid="${esc(p.uid)}" data-op="${esc(p.op)}" data-dest="${esc(p.dest)}" data-time="${esc(p.time)}" data-mode="${esc(mode)}" data-agent-target="select-train">
     <div class="card-row">
       <span class="card-time">${esc(p.time)}</span>
-      <button class="pin-star on" type="button" data-pin-remove="${esc(p.uid)}" aria-label="Remove ${esc(p.dest)} from pinned trains" title="Remove">✕</button>
+      <button class="pin-star on" type="button" data-pin-remove="${esc(p.uid)}" aria-label="Remove ${esc(p.dest)} from pinned services" title="Remove">✕</button>
     </div>
     <div class="card-dest">${esc(p.dest)}</div>
-    <div class="card-meta"><span class="op-name">${esc(p.op)}</span><span>${p.at ? "Saved " + agoText(p.at) : ""}</span></div>
+    <div class="card-meta"><span class="op-name">${esc(p.op)}</span><span>${badge}${badge && p.at ? " · " : ""}${p.at ? "Saved " + agoText(p.at) : ""}</span></div>
   </div>`;
 }
 function renderPinned() {
@@ -719,17 +752,21 @@ function renderPinned() {
   manualView = "pinned";
   screenName = "pinned";
   setActiveView("pinned");
-  setViewTitle("Pinned trains");
+  setViewTitle("Pinned services");
   setStatus("PINNED", "ok");
   const scroll = $screen.scrollTop;
   const rows = pinnedTrains.length
     ? pinnedTrains.map(pinnedRow).join("")
-    : `<div class="notice"><div class="big">No pinned trains</div><div class="sub">Tap ☆ on any train to save it here for quick access.</div><button class="btn btn-wide" id="pinned-nearby" data-agent-target="nav-nearby">NEARBY STATIONS</button></div>`;
-  $screen.innerHTML = `<div class="screen-title">⭐ Saved trains</div>${rows}`;
+    : `<div class="notice"><div class="big">No pinned services</div><div class="sub">Tap ☆ on any train or bus to save it here for quick access.</div><button class="btn btn-wide" id="pinned-nearby" data-agent-target="nav-nearby">NEARBY STATIONS</button></div>`;
+  $screen.innerHTML = `<div class="screen-title">⭐ Saved services</div>${rows}`;
   setBusy(false);
   $screen.scrollTop = scroll;
   $screen.querySelectorAll(".card[data-uid]").forEach((el) => {
-    const act = () => lockOnto(el.dataset.uid, el.dataset.op, false, renderPinned);
+    const act = () => lockOnto(el.dataset.uid, el.dataset.op, false, renderPinned, {
+      dest: el.dataset.dest || "",
+      time: el.dataset.time || "",
+      mode: el.dataset.mode || "TRAIN",
+    });
     el.onclick = act;
     el.onkeydown = (e) => {
       if (e.key === "Enter" || e.key === " ") { e.preventDefault(); act(); }
@@ -787,7 +824,7 @@ async function enterStation(station, distance, opts = {}) {
   if (prevServices && prevServices.length) {
     renderStation(station, prevServices, distance, { refreshing: true, updatedAt: boardUpdatedAt });
   } else {
-    renderNotice(station.n.toUpperCase(), "Loading live trains…", true);
+    renderNotice(station.n.toUpperCase(), "Loading live departures…", true);
     screenName = "station";
   }
 
@@ -805,7 +842,7 @@ async function enterStation(station, distance, opts = {}) {
     if (prevServices && prevServices.length) {
       renderStation(station, prevServices, distance, { error: e.message, updatedAt: boardUpdatedAt });
     } else {
-      renderNotice("CAN'T LOAD TRAINS", e.message, false, true);
+      renderNotice("CAN'T LOAD SERVICES", e.message, false, true);
       screenName = "station";
     }
   }
@@ -831,12 +868,14 @@ function renderStation(station, services, distance, meta = {}) {
   const distTxt = typeof distance === "number"
     ? (distance < 1000 ? `${Math.round(distance)} m` : `${(distance / 1000).toFixed(1)} km`)
     : "";
+  const anyBus = services.some((s) => isBusMode(modeOf(s)));
+  const kind = anyBus ? "train or bus" : "train";
   const heading = far
-    ? `${esc(station.n)} · ${distTxt} away — tap your train`
-    : `${esc(station.n)} · tap the train you're on`;
+    ? `${esc(station.n)} · ${distTxt} away — tap your ${kind}`
+    : `${esc(station.n)} · tap the ${kind} you're on`;
   const cards = services.length
     ? services.map(departureCard).join("")
-    : `<div class="notice"><div class="big">No trains listed right now</div><div class="sub">Try Reload — it may just be a quiet moment.</div></div>`;
+    : `<div class="notice"><div class="big">No services listed right now</div><div class="sub">Try Reload — it may just be a quiet moment.</div></div>`;
   const statusLine = meta.error
     ? `<div class="board-status warn">Couldn't refresh — showing last update</div>`
     : meta.refreshing
@@ -850,7 +889,7 @@ function renderStation(station, services, distance, meta = {}) {
      </div>` +
     statusLine +
     cards +
-    (pinnedTrains.length ? `<button class="link-btn" id="pinned-link" data-agent-target="pinned-trains">⭐ Pinned trains (${pinnedTrains.length})</button>` : "");
+    (pinnedTrains.length ? `<button class="link-btn" id="pinned-link" data-agent-target="pinned-trains">⭐ Pinned services (${pinnedTrains.length})</button>` : "");
   setBusy(false);
   $screen.scrollTop = scroll;
   bindCards(() => renderStation(station, services, distance, meta));
@@ -900,6 +939,7 @@ function mergeBoardServices(fresh, prev) {
 function departureCard(s) {
   const dep = s.temporalData && s.temporalData.departure;
   const dest = destInfo(s);
+  const mode = modeOf(s);
   const booked = bookedTime(dep);
   const live = bestTime(dep);
   const sev = delaySeverity(latenessMin(dep));
@@ -913,28 +953,36 @@ function departureCard(s) {
   const plat = platformOf(s.locationMetadata);
   const op = (s.scheduleMetadata && s.scheduleMetadata.operator && s.scheduleMetadata.operator.name) || "";
   const uid = (s.scheduleMetadata && s.scheduleMetadata.uniqueIdentity) || "";
-  return `<div class="card" role="button" tabindex="0" data-uid="${esc(uid)}" data-op="${esc(op)}" data-dest="${esc(dest.name)}" data-time="${esc(fmtClock(live || booked))}" data-agent-target="select-train">
-    <div class="card-row"><span class="card-time">${timeHtml}</span>${pinStarHtml(uid, op, dest.name, fmtClock(live || booked))}</div>
+  const time = fmtClock(live || booked);
+  // A bus has no platform, so the right-hand column carries its mode instead.
+  const right = isTrainMode(mode)
+    ? `<span class="card-plat">${plat ? "Plat " + esc(plat) : "Plat —"}</span>`
+    : modeBadgeHtml(mode);
+  return `<div class="card${isTrainMode(mode) ? "" : " is-bus"}" role="button" tabindex="0" data-uid="${esc(uid)}" data-op="${esc(op)}" data-dest="${esc(dest.name)}" data-time="${esc(time)}" data-mode="${esc(mode)}" data-agent-target="select-train">
+    <div class="card-row"><span class="card-time">${timeHtml}</span>${pinStarHtml(uid, op, dest.name, time, mode)}</div>
     <div class="card-dest">${esc(dest.name)}</div>
-    <div class="card-meta"><span class="op-name">${esc(op)}</span><span class="card-plat">${plat ? "Plat " + esc(plat) : "Plat —"}</span></div>
+    <div class="card-meta"><span class="op-name">${esc(op)}</span>${right}</div>
   </div>`;
 }
 
 // A tappable star for saving a train to the pinned shortlist, without
 // triggering the card's own "lock onto this train" click (stopPropagation).
-function pinStarHtml(uid, op, dest, time) {
+function pinStarHtml(uid, op, dest, time, mode) {
   const on = isPinned(uid);
-  const label = `${on ? "Unpin" : "Pin"} ${dest || "this train"}`;
+  const label = `${on ? "Unpin" : "Pin"} ${dest || "this " + modeNoun(mode)}`;
   return `<button class="pin-star${on ? " on" : ""}" type="button" data-pin-uid="${esc(uid)}" data-pin-op="${esc(op)}" ` +
-    `data-pin-dest="${esc(dest)}" data-pin-time="${esc(time)}" aria-pressed="${on}" aria-label="${esc(label)}" title="${esc(label)}">${on ? "★" : "☆"}</button>`;
+    `data-pin-dest="${esc(dest)}" data-pin-time="${esc(time)}" data-pin-mode="${esc(mode || "TRAIN")}" aria-pressed="${on}" aria-label="${esc(label)}" title="${esc(label)}">${on ? "★" : "☆"}</button>`;
 }
 function bindPinStars() {
   $screen.querySelectorAll(".pin-star").forEach((el) => {
     el.onclick = (e) => {
       e.stopPropagation();
-      togglePin({ uid: el.dataset.pinUid, op: el.dataset.pinOp, dest: el.dataset.pinDest, time: el.dataset.pinTime });
+      togglePin({
+        uid: el.dataset.pinUid, op: el.dataset.pinOp, dest: el.dataset.pinDest,
+        time: el.dataset.pinTime, mode: el.dataset.pinMode,
+      });
       const on = isPinned(el.dataset.pinUid);
-      const label = `${on ? "Unpin" : "Pin"} ${el.dataset.pinDest || "this train"}`;
+      const label = `${on ? "Unpin" : "Pin"} ${el.dataset.pinDest || "this " + modeNoun(el.dataset.pinMode)}`;
       el.textContent = on ? "★" : "☆";
       el.classList.toggle("on", on);
       el.setAttribute("aria-pressed", String(on));
@@ -956,10 +1004,10 @@ async function enterMoving() {
   manualView = "train";
   screenName = "guess";
   setActiveView("train");
-  setViewTitle("Find your train");
+  setViewTitle("Find your service");
   candidates = []; candidateIdx = 0;
-  setStatus("ON A TRAIN", "ok");
-  renderNotice("ON THE MOVE", "Working out which train you're on…", true);
+  setStatus("ON THE MOVE", "ok");
+  renderNotice("ON THE MOVE", "Working out which service you're on…", true);
 
   const ahead = stationAhead(lastFix);
   if (!ahead) { renderNotice("CAN'T LOCATE", "No nearby stations found.", false, true); return; }
@@ -978,14 +1026,14 @@ async function enterMoving() {
       const s = candidates[0];
       const uid = s.scheduleMetadata && s.scheduleMetadata.uniqueIdentity;
       const op = s.scheduleMetadata && s.scheduleMetadata.operator && s.scheduleMetadata.operator.name;
-      if (uid) { lockOnto(uid, op, true); return; }
+      if (uid) { lockOnto(uid, op, true, undefined, { mode: modeOf(s) }); return; }
     }
     if (candidates.length) { candidateIdx = 0; renderGuess(); }
     else renderFallbackList(ahead.station, services);
   } catch (e) {
     if (screenName !== "notice" && screenName !== "guess") return;
-    setStatus("TRAIN ERROR", "err");
-    renderNotice("CAN'T IDENTIFY TRAIN", e.message, false, true);
+    setStatus("SERVICE ERROR", "err");
+    renderNotice("CAN'T IDENTIFY SERVICE", e.message, false, true);
   }
 }
 
@@ -1011,8 +1059,10 @@ function renderGuess() {
   screenName = "guess";
   manualView = "train";
   setActiveView("train");
-  setViewTitle("Find your train");
   const s = candidates[candidateIdx];
+  const mode = modeOf(s);
+  const noun = modeNoun(mode);
+  setViewTitle("Find your " + noun);
   const dep = s.temporalData && s.temporalData.departure;
   const dest = destInfo(s);
   const time = fmtClock(bestTime(dep));
@@ -1020,12 +1070,12 @@ function renderGuess() {
   const uid = (s.scheduleMetadata && s.scheduleMetadata.uniqueIdentity) || "";
   const remaining = candidates.length - candidateIdx - 1;
   $screen.innerHTML = `
-    <div class="screen-title">Are you on this train?</div>
+    <div class="screen-title">Are you on this ${noun}?</div>
     <div class="guess-wrap">
-      <div class="guess-card">
-        <div class="card-row"><span class="card-time">${time}</span>${pinStarHtml(uid, op, dest.name, time)}</div>
+      <div class="guess-card${isTrainMode(mode) ? "" : " is-bus"}">
+        <div class="card-row"><span class="card-time">${time}</span>${pinStarHtml(uid, op, dest.name, time, mode)}</div>
         <div class="card-dest">${esc(dest.name)}</div>
-        <div class="card-meta"><span class="op-name">${esc(op)}</span></div>
+        <div class="card-meta"><span class="op-name">${esc(op)}</span>${modeBadgeHtml(mode)}</div>
         <div class="candidate-count">${remaining > 0 ? remaining + " other option(s)" : "last option"}</div>
       </div>
       <div class="btn-row">
@@ -1035,9 +1085,9 @@ function renderGuess() {
     </div>
     <button class="link-btn" id="g-list" data-agent-target="show-all-departures">Show all departures instead</button>
     <button class="link-btn" id="g-nearby" data-agent-target="nearby-stations">Wrong station? Pick a nearby one</button>
-    ${pinnedTrains.length ? `<button class="link-btn" id="g-pinned" data-agent-target="pinned-trains">⭐ Pinned trains (${pinnedTrains.length})</button>` : ""}`;
+    ${pinnedTrains.length ? `<button class="link-btn" id="g-pinned" data-agent-target="pinned-trains">⭐ Pinned services (${pinnedTrains.length})</button>` : ""}`;
   setBusy(false);
-  document.getElementById("g-yes").onclick = () => lockOnto(uid, op, false, renderGuess);
+  document.getElementById("g-yes").onclick = () => lockOnto(uid, op, false, renderGuess, { dest: dest.name, time, mode });
   document.getElementById("g-no").onclick = nextCandidate;
   document.getElementById("g-list").onclick = () => {
     pushNav(renderGuess);
@@ -1059,16 +1109,17 @@ function renderFallbackList(station, services) {
   screenName = "fallback";
   manualView = "train";
   setActiveView("train");
-  setViewTitle("Find your train");
+  const anyBus = (services || []).some((s) => isBusMode(modeOf(s)));
+  setViewTitle(anyBus ? "Find your train or bus" : "Find your train");
   const cards = (services || []).map(departureCard).join("")
     || `<div class="notice"><div class="big">No departures found</div></div>`;
   $screen.innerHTML =
-    `<div class="screen-title">Tap the train you're on (${esc(station.c)})</div>${cards}` +
+    `<div class="screen-title">Tap the ${anyBus ? "train or bus" : "train"} you're on (${esc(station.c)})</div>${cards}` +
     `<div class="btn-row" style="margin-top:6px">
        <button class="btn" id="rescan" data-agent-target="rescan"><span class="btn-ico">↻</span> <span class="btn-label">RE-SCAN</span></button>
        <button class="btn" id="nearby" data-agent-target="nearby-stations">NEARBY STATIONS →</button>
      </div>` +
-    (pinnedTrains.length ? `<button class="link-btn" id="pinned-link" data-agent-target="pinned-trains">⭐ Pinned trains (${pinnedTrains.length})</button>` : "");
+    (pinnedTrains.length ? `<button class="link-btn" id="pinned-link" data-agent-target="pinned-trains">⭐ Pinned services (${pinnedTrains.length})</button>` : "");
   setBusy(false);
   bindCards(() => renderFallbackList(station, services));
   busyTap("rescan", "RE-SCANNING…", enterMoving);
@@ -1080,6 +1131,7 @@ function renderFallbackList(station, services) {
 // ---------- STATE 3: confirmed ----------
 function lockOnto(uid, op, auto, returnTo, info) {
   if (!uid) return;
+  const mode = (info && info.mode) || (locked && locked.uid === uid && locked.mode) || "TRAIN";
   clearNav();
   stationRequest++;
   clearInterval(boardTimer);
@@ -1088,10 +1140,10 @@ function lockOnto(uid, op, auto, returnTo, info) {
   manualView = null;
   screenName = "train";
   setActiveView("pinned");
-  setViewTitle("My train");
+  setViewTitle(modeTitle(mode));
   if (returnTo) pushNav(returnTo);
-  locked = { uid, op: op || "", auto: !!auto };
-  pinCurrentTrain(uid, op, info && info.dest, info && info.time);
+  locked = { uid, op: op || "", auto: !!auto, mode };
+  pinCurrentTrain(uid, op, info && info.dest, info && info.time, mode);
   try { sessionStorage.setItem("mytrain.locked", JSON.stringify(locked)); } catch (_) {}
   // Make the URL a deep link to this exact train (shareable / bookmarkable / QR-able).
   try {
@@ -1100,7 +1152,7 @@ function lockOnto(uid, op, auto, returnTo, info) {
     }
   } catch (_) {}
   current = State.CONFIRMED;
-  setStatus("TRAIN LOCKED", "ok");
+  setStatus(`${modeNoun(mode).toUpperCase()} LOCKED`, "ok");
   stopGeo();              // no need to track location once we know the train
   lastSvc = null; lastLoadedAt = 0; staleMsg = "";   // fresh train, no stale fallback
   try { localStorage.removeItem("mytrain.lastSvc"); } catch (_) {}
@@ -1112,7 +1164,8 @@ function shareTrain() {
   if (!locked) return;
   let url;
   try { url = location.origin + location.pathname + "?train=" + encodeURIComponent(locked.uid); } catch (_) { return; }
-  if (navigator.share) { navigator.share({ title: "My Train", text: "Live train tracker", url }).catch(() => {}); return; }
+  const noun = modeNoun(locked.mode);
+  if (navigator.share) { navigator.share({ title: modeTitle(locked.mode), text: `Live ${noun} tracker`, url }).catch(() => {}); return; }
   if (navigator.clipboard && navigator.clipboard.writeText) {
     navigator.clipboard.writeText(url).then(
       () => { setStatus("LINK COPIED", "ok"); announce("Link copied"); },
@@ -1126,9 +1179,10 @@ function shareTrain() {
 // Tap-only fallback for devices with no share sheet and no clipboard. No
 // input, no prompt, no keyboard: the URL is selectable text plus a copy tap.
 function showCopyPanel(url) {
-  const html = `<div class="guide-overlay" id="copy-overlay" role="dialog" aria-modal="true" aria-label="Share this train">
+  const noun = modeNoun(locked && locked.mode);
+  const html = `<div class="guide-overlay" id="copy-overlay" role="dialog" aria-modal="true" aria-label="Share this ${noun}">
     <div class="guide-card">
-      <h2>Share this train</h2>
+      <h2>Share this ${noun}</h2>
       <p class="sub">Copy the link below, or use your phone's share menu.</p>
       <div class="copy-url" id="copy-url">${esc(url)}</div>
       <button class="btn btn-wide" id="copy-link" data-agent-target="copy-link">COPY LINK</button>
@@ -1189,7 +1243,7 @@ async function loadService(silent) {
       if (cached && cached.uid === locked.uid) { lastSvc = cached.svc; lastLoadedAt = cached.at; }
     } catch (_) {}
   }
-  if (!silent && !lastSvc) renderNotice("LOADING TRAIN", "Fetching live progress…", true);
+  if (!silent && !lastSvc) renderNotice(`LOADING ${modeNoun(locked.mode).toUpperCase()}`, "Fetching live progress…", true);
   try {
     const data = await api(`/api/service?uid=${encodeURIComponent(locked.uid)}`);
     const svc = data.service || data;
@@ -1205,20 +1259,31 @@ async function loadService(silent) {
         ? "Offline — showing last update" : "Couldn't refresh — showing last update";
       if (trainScreenVisible()) renderTrain(lastSvc);
     } else if (!silent && trainScreenVisible()) {
-      renderNotice("CAN'T LOAD TRAIN", e.message, false, true, true);
+      renderNotice(`CAN'T LOAD ${modeNoun(locked.mode).toUpperCase()}`, e.message, false, true, true);
     }
   }
 }
 
 function renderTrain(svc) {
   lastSvc = svc;
+  // If a service-detail response omits modeType, keep the mode we locked with
+  // from the departure card rather than silently falling back to "train".
+  const hasMode = !!(svc.scheduleMetadata && svc.scheduleMetadata.modeType);
+  const mode = hasMode ? modeOf(svc) : ((locked && locked.mode) || modeOf(svc));
+  const noun = modeNoun(mode);
+  // Deep links and saved sessions may not know the mode until the service
+  // response arrives, so remember it now for titles, sharing and pins.
+  if (locked) {
+    locked.mode = mode;
+    try { sessionStorage.setItem("mytrain.locked", JSON.stringify(locked)); } catch (_) {}
+  }
   stationRequest++;
   clearInterval(boardTimer);
   boardTimer = null;
   manualView = null;
   screenName = "train";
   setActiveView("pinned");
-  setViewTitle("My train");
+  setViewTitle(modeTitle(mode));
   const prevScroll = $screen.scrollTop;
   const activeEl = document.activeElement;
   const prevFocus = activeEl && $screen.contains(activeEl)
@@ -1251,12 +1316,22 @@ function renderTrain(svc) {
 
   const probeTd = (next.temporalData && (next.temporalData.arrival || next.temporalData.departure)) || null;
   const delayMin = latenessMin(probeTd);
+  // Replacement buses are often schedule-only. If nothing on the service has
+  // live data, say so plainly and stop calling its scheduled times "on time".
+  const hasLive = stops.some((l) => {
+    const td = l.temporalData || {};
+    return [td.arrival, td.departure, td.pass].some((t) => t && (t.realtimeForecast ||
+      t.realtimeActual || typeof t.realtimeAdvertisedLateness === "number"));
+  });
+  const scheduledOnly = !isTrainMode(mode) && !hasLive;
   const reasons = svc.reasons && svc.reasons[0];
   const reason = reasons ? (reasons.longText || reasons.shortText || "") : "";
 
   const op = (svc.scheduleMetadata && svc.scheduleMetadata.operator && svc.scheduleMetadata.operator.name) || locked.op || "";
   const finalName = locName(final);
-  const headcode = (svc.scheduleMetadata && (svc.scheduleMetadata.trainReportingIdentity || svc.scheduleMetadata.identity)) || "";
+  const headcode = isTrainMode(mode)
+    ? ((svc.scheduleMetadata && (svc.scheduleMetadata.trainReportingIdentity || svc.scheduleMetadata.identity)) || "")
+    : "";
 
   // Identify the service the way a passenger names it: its scheduled departure
   // time from its origin station, plus the origin name ("23:30 from Brighton").
@@ -1267,12 +1342,15 @@ function renderTrain(svc) {
   const originLive = bestTime(originDep);
   const dueHtml = `${fmtClock(originBooked || originLive)} from ${esc(locName(stops[0]))}`;
 
-  // The train you're on is always in Pinned, so that tab is the way back to it.
-  pinCurrentTrain(locked.uid, op, finalName, fmtClock(originBooked || originLive));
+  // The service you're on is always in Pinned, so that tab is the way back to it.
+  pinCurrentTrain(locked.uid, op, finalName, fmtClock(originBooked || originLive), mode);
 
-  // Where the train is right now.
-  let posLine;
-  if (arrived) {
+  // Where the service is right now. With no live data we can't know, so the
+  // scheduled-only banner carries the message instead of a false position.
+  let posLine = "";
+  if (scheduledOnly) {
+    posLine = "";
+  } else if (arrived) {
     posLine = `Arrived at ${esc(finalName)}`;
   } else if (lastDeparted < 0) {
     posLine = `At ${esc(locName(stops[0]))} · departs ${fmtClock(bestTime(stops[0].temporalData && stops[0].temporalData.departure))}`;
@@ -1280,21 +1358,23 @@ function renderTrain(svc) {
     const st = next.temporalData && next.temporalData.status;
     posLine = (st === "AT_PLATFORM" || st === "ARRIVING")
       ? `At ${esc(locName(next))}`
-      : legProgressHtml(stops[lastDeparted], next);
+      : legProgressHtml(stops[lastDeparted], next, mode);
   }
 
   let html = `<div class="train-head">
       <div>
-        <div class="op">${esc(op)}${pinStarHtml(locked.uid, op, finalName, fmtClock(originLive || originBooked))}</div>
+        <div class="op">${esc(op)}${pinStarHtml(locked.uid, op, finalName, fmtClock(originLive || originBooked), mode)}${modeBadgeHtml(mode)}</div>
         <div class="due">${dueHtml}</div>
       </div>
       <div class="final">to ${esc(finalName)}${headcode ? `<br>${esc(headcode)}` : ""}</div>
     </div>`;
 
-  if (locked.auto) html += `<div class="auto-note">Auto-picked your most likely train — wrong one? Use the button below.</div>`;
+  if (locked.auto) html += `<div class="auto-note">Auto-picked your most likely ${noun} — wrong one? Use the button below.</div>`;
 
   if (arrived) {
     html += `<div class="delay-banner delay-ok">✓ ARRIVED AT ${esc(finalName).toUpperCase()}</div>`;
+  } else if (scheduledOnly) {
+    html += `<div class="delay-banner delay-neutral">${modeIcon(mode)} SCHEDULED ${noun.toUpperCase()} · no live tracking</div>`;
   } else {
     const bannerSev = delaySeverity(delayMin);
     const bannerIcon = severityIcon(bannerSev);
@@ -1302,7 +1382,7 @@ function renderTrain(svc) {
     html += `<div class="delay-banner delay-${bannerSev}">${bannerIcon} ${bannerLabel}${reason ? `<div class="delay-reason">${esc(reason)}</div>` : ""}</div>`;
   }
 
-  html += `<div class="train-status">${posLine}</div>`;
+  if (posLine) html += `<div class="train-status">${posLine}</div>`;
 
   // A service with more than one top-level destination divides into separate
   // portions somewhere ahead (confirmed against a live RTT board response —
@@ -1310,8 +1390,8 @@ function renderTrain(svc) {
   // not a separate "associations" field). Surface it as soon as it's known,
   // not just when the stop card scrolls into view, since the user needs to
   // know which part of the train to be in well in advance.
-  const splitDests = (svc.destination || []).length > 1 ? svc.destination : null;
-  const formationIdx = formationChangeIdx(stops, nextIdx);
+  const splitDests = isTrainMode(mode) && (svc.destination || []).length > 1 ? svc.destination : null;
+  const formationIdx = isTrainMode(mode) ? formationChangeIdx(stops, nextIdx) : -1;
 
   // The hero board: the user's chosen stop is the headline when they've picked
   // one and it's still ahead; otherwise the next stop takes the slot.
@@ -1332,7 +1412,7 @@ function renderTrain(svc) {
 
   if (myActive) {
     const kind = myIdx === nextIdx ? "getoff" : "yourstop";
-    html += stopHero(stops[myIdx], kind, myIdx === finalIdx, myIdx === nextIdx && atNext, myIdx);
+    html += stopHero(stops[myIdx], kind, myIdx === finalIdx, myIdx === nextIdx && atNext, myIdx, scheduledOnly);
     if (splitBeforeMyStop) {
       html += `<div class="stop-alert">⚡ This train divides at ${esc(locName(stops[formationIdx]))} before your stop — make sure you're in the right part of the train.</div>`;
     }
@@ -1345,7 +1425,7 @@ function renderTrain(svc) {
       </div>`;
     }
   } else if (!arrived) {
-    html += stopHero(next, nextIdx === finalIdx ? "final" : "next", nextIdx === finalIdx, atNext, nextIdx);
+    html += stopHero(next, nextIdx === finalIdx ? "final" : "next", nextIdx === finalIdx, atNext, nextIdx, scheduledOnly);
     html += `<div class="hint-tap">Tap your stop below to track when to get off.</div>`;
   }
 
@@ -1356,7 +1436,7 @@ function renderTrain(svc) {
 
   if (!arrived && finalIdx > nextIdx) {
     html += `<div class="screen-title" style="margin-top:16px">Then calling at</div>`;
-    for (let i = nextIdx + 1; i <= finalIdx; i++) html += stopRow(stops[i], i === finalIdx, myCrs, i === formationIdx, i);
+    for (let i = nextIdx + 1; i <= finalIdx; i++) html += stopRow(stops[i], i === finalIdx, myCrs, i === formationIdx, i, scheduledOnly);
   }
 
   html += `<button class="btn btn-wide refresh-btn" id="refresh-now" data-agent-target="refresh-train"><span class="btn-ico">↻</span> <span class="btn-label">REFRESH</span></button>`;
@@ -1364,11 +1444,11 @@ function renderTrain(svc) {
   const agoTxt = !lastLoadedAt ? "now" : (ago <= 0 ? "just now" : `${ago} min ago`);
   html += `<div class="updated-note${staleMsg ? " warn" : ""}">${staleMsg ? esc(staleMsg) + " · " : "Updated "}${staleMsg ? "" : agoTxt + " · "}auto-refresh 60s</div>`;
   html += `<button class="btn btn-wide" id="qr" style="margin-top:8px" data-agent-target="share-train">▦ SHARE / QR</button>`;
-  html += `<button class="btn btn-wide btn-ghost" id="forget" style="margin-top:10px" data-agent-target="pick-different-train">CHANGE TRAIN</button>`;
-  if (pinnedTrains.length) html += `<button class="link-btn" id="pinned-link" data-agent-target="pinned-trains">⭐ Pinned trains (${pinnedTrains.length})</button>`;
+  html += `<button class="btn btn-wide btn-ghost" id="forget" style="margin-top:10px" data-agent-target="pick-different-train">CHANGE ${noun.toUpperCase()}</button>`;
+  if (pinnedTrains.length) html += `<button class="link-btn" id="pinned-link" data-agent-target="pinned-trains">⭐ Pinned services (${pinnedTrains.length})</button>`;
   html += `<div class="app-footer">
     Made by <a href="https://www.strangegoose.co.uk" target="_blank" rel="noopener">Strange Goose</a><br>
-    Train data via <a href="https://www.realtimetrains.co.uk" target="_blank" rel="noopener">Realtime Trains</a>
+    Live data via <a href="https://www.realtimetrains.co.uk" target="_blank" rel="noopener">Realtime Trains</a>
     ${apiLimitFooterHtml()}
   </div>`;
 
@@ -1410,13 +1490,14 @@ function setMyStop(crs) {
 // screen and open the same live train view — the same idea as on-train QR codes.
 function renderQR() {
   if (!locked) return;
+  const noun = modeNoun(locked.mode);
   stationRequest++;
   clearInterval(boardTimer);
   boardTimer = null;
   screenName = "qr";
   manualView = "train";
   setActiveView("pinned");
-  setViewTitle("Share train");
+  setViewTitle("Share " + noun);
   let url;
   try { url = location.origin + location.pathname + "?train=" + encodeURIComponent(locked.uid); }
   catch (_) { url = "?train=" + encodeURIComponent(locked.uid); }
@@ -1430,7 +1511,7 @@ function renderQR() {
     }
   } catch (_) {}
   $screen.innerHTML = `<div class="notice">
-    <div class="screen-title">Scan to open this train</div>
+    <div class="screen-title">Scan to open this ${noun}</div>
     ${svg ? `<div class="qr-box">${svg}</div>` : `<div class="sub">Couldn't draw a QR here — use Share instead.</div>`}
     <div class="sub">Point a phone camera at this to open the same live timetable.</div>
     <button class="btn btn-wide" id="qr-share" data-agent-target="share-train">🔗 SHARE LINK</button>
@@ -1452,7 +1533,7 @@ function shortCode(stop) {
 // "Left A, heading to B" rendered as a track with a train icon positioned
 // by elapsed time between A's departure and B's best arrival/departure time,
 // instead of just naming both ends.
-function legProgressHtml(from, to) {
+function legProgressHtml(from, to, mode) {
   const dep = bestTime(from.temporalData && from.temporalData.departure);
   const arr = bestTime((to.temporalData && (to.temporalData.arrival || to.temporalData.departure)) || null);
   let pct = 50;
@@ -1462,7 +1543,7 @@ function legProgressHtml(from, to) {
   }
   return `<div class="train-progress">
       <span class="tp-code">${esc(shortCode(from))}</span>
-      <div class="tp-track"><div class="tp-fill" style="width:${pct}%"></div><span class="tp-train" style="left:${pct}%">🚆</span></div>
+      <div class="tp-track"><div class="tp-fill" style="width:${pct}%"></div><span class="tp-train" style="left:${pct}%">${modeIcon(mode)}</span></div>
       <span class="tp-code">${esc(shortCode(to))}</span>
     </div>`;
 }
@@ -1492,8 +1573,9 @@ function splitJoinBadgeHtml(stop, isFormationChange) {
 
 // One stop's timing with no arithmetic: "On time · 14:26", or scheduled and
 // expected both shown plainly ("Sched 14:26 → Exp 14:29") when they differ.
-function schedExpHtml(booked, arr) {
+function schedExpHtml(booked, arr, scheduledOnly) {
   if (!arr) return "";
+  if (scheduledOnly) return `<span class="scheduled">Scheduled ${fmtClock(booked || arr)}</span>`;
   const late = booked && (arr - booked) >= 60000;
   if (!late) return `<span class="on-time">On time</span> · ${fmtClock(arr)}`;
   return `Sched ${fmtClock(booked)} <span class="arrow">→</span> <span class="exp">Exp ${fmtClock(arr)}</span>`;
@@ -1501,7 +1583,7 @@ function schedExpHtml(booked, arr) {
 
 // The hero board: the one stop the user most cares about, rendered like the
 // train's own LED display. kind: "yourstop" | "getoff" | "next" | "final".
-function stopHero(stop, kind, isFinal, atStop, idx) {
+function stopHero(stop, kind, isFinal, atStop, idx, scheduledOnly) {
   const td = stop.temporalData || {};
   // Sitting at this stop → its departure is the meaningful time (arrival is
   // already in the past); otherwise its arrival.
@@ -1515,9 +1597,11 @@ function stopHero(stop, kind, isFinal, atStop, idx) {
     : kind === "getoff" ? "GET OFF NEXT"
     : kind === "yourstop" ? (isFinal ? "YOUR LAST STOP" : "YOUR STOP")
     : isFinal ? "FINAL DESTINATION" : "NEXT STOP";
-  const status = late
-    ? `<div class="sh-status late">▲ ${lateMin} min late</div>`
-    : `<div class="sh-status ok">✓ On time</div>`;
+  const status = scheduledOnly
+    ? `<div class="sh-status scheduled">Scheduled</div>`
+    : late
+      ? `<div class="sh-status late">▲ ${lateMin} min late</div>`
+      : `<div class="sh-status ok">✓ On time</div>`;
   // When boarding, the headline is when it leaves, not an ETA to arrive.
   const whenLabel = atStop ? "DEPARTS" : "ETA";
   const metaWord = atStop ? "Departs" : "Arrives";
@@ -1536,7 +1620,7 @@ function stopHero(stop, kind, isFinal, atStop, idx) {
 }
 
 // Compact one-line row for each remaining calling point in the full timetable.
-function stopRow(stop, isFinal, myCrs, isFormationChange, idx) {
+function stopRow(stop, isFinal, myCrs, isFormationChange, idx, scheduledOnly) {
   const td = stop.temporalData || {};
   const tdArr = td.arrival || td.departure;
   const arr = bestTime(tdArr);
@@ -1553,7 +1637,7 @@ function stopRow(stop, isFinal, myCrs, isFormationChange, idx) {
     <span class="sr-name${sizeClass}">${esc(name)}${isFinal ? ` <span class="sr-dest">DEST</span>` : ""}${mine ? ` <span class="sr-dest">YOUR STOP</span>` : ""}</span>
     <span class="sr-right">
       <span class="sr-eta">${etaHM(arr) || "—"}</span>
-      <span class="sr-time">${schedExpHtml(booked, arr)}${plat ? ` · P${esc(plat)}` : ""}</span>
+      <span class="sr-time">${schedExpHtml(booked, arr, scheduledOnly)}${plat ? ` · P${esc(plat)}` : ""}</span>
     </span>
     ${splitJoinBadgeHtml(stop, isFormationChange)}
   </div>`;
@@ -1592,8 +1676,8 @@ function renderNotice(big, sub, spinner, isError, allowForget, allowPinned) {
     <div class="big">${esc(big)}</div>
     ${sub ? `<div class="sub">${esc(sub)}</div>` : ""}
     ${isError ? `<button class="btn btn-wide" id="retry" data-agent-target="retry">↻ TRY AGAIN</button>` : ""}
-    ${allowForget ? `<button class="link-btn" id="forget2" data-agent-target="pick-different-train">Pick a different train</button>` : ""}
-    ${allowPinned && pinnedTrains.length ? `<button class="link-btn" id="pinned-link" data-agent-target="pinned-trains">⭐ Pinned trains (${pinnedTrains.length})</button>` : ""}
+    ${allowForget ? `<button class="link-btn" id="forget2" data-agent-target="pick-different-train">Pick a different service</button>` : ""}
+    ${allowPinned && pinnedTrains.length ? `<button class="link-btn" id="pinned-link" data-agent-target="pinned-trains">⭐ Pinned services (${pinnedTrains.length})</button>` : ""}
   </div>`;
   setBusy(!!spinner);
   announce(big);
@@ -1642,6 +1726,7 @@ function bindCards(returnTo) {
     const act = () => lockOnto(el.dataset.uid, el.dataset.op, false, returnTo, {
       dest: el.dataset.dest || "",
       time: el.dataset.time || "",
+      mode: el.dataset.mode || "TRAIN",
     });
     el.onclick = act;
     el.onkeydown = (e) => {
@@ -1662,7 +1747,7 @@ function esc(s) {
 // screen is currently showing without disturbing app state underneath.
 const GUIDE_STEPS = [
   "No typing — allow location, then tap your station from the nearby list.",
-  "<b>At a station:</b> tap the train you're on from the live departures, then pin it (★).",
+  "<b>At a station:</b> tap the train or replacement bus you're on from the live departures, then pin it (★).",
   "<b>Locked on:</b> see every remaining stop with live times, platforms and delays, auto-refreshing every 60s.",
   "Tap a stop to get a reminder banner when it's time to get off.",
   "Pin a train (★), or share it as a QR code / link — both work from the train screen.",
@@ -1794,9 +1879,9 @@ async function boot() {
       current = State.CONFIRMED;
       screenName = "train";
       setActiveView("pinned");
-      pinCurrentTrain(locked.uid, locked.op);
-      setViewTitle("My train");
-      setStatus("TRAIN LOCKED", "ok");
+      pinCurrentTrain(locked.uid, locked.op, undefined, undefined, locked.mode);
+      setViewTitle(modeTitle(locked.mode));
+      setStatus(`${modeNoun(locked.mode).toUpperCase()} LOCKED`, "ok");
       loadService();
       startAutoRefresh();
     } catch (_) { sessionStorage.removeItem("mytrain.locked"); }
